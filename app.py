@@ -182,14 +182,14 @@ try:
             st.bar_chart(comp_df[comp_df["단가 (원)"] > 0].set_index("구분"))
 
     # ====================================================
-    # 📄 PAGE 2: 업체 견적서 일괄 검토 (신규)
+    # 📄 PAGE 2: 업체 견적서 일괄 검토
     # ====================================================
     elif page == "📄 업체 견적서 일괄 검토":
         st.title("📄 업체 제출 견적서 일괄 검토")
         st.caption("업체에서 제출한 엑셀 견적서를 업로드하면, 사내 단가 DB와 자동으로 비교하여 적정성을 일괄 심사합니다.")
         st.divider()
 
-        # 샘플 서식 다운로드 지원
+        # openpyxl 엔진 사용으로 오류 방지
         sample_df = pd.DataFrame({
             "자재명": ["볼밸브", "고분자응집제", "가스켓"],
             "자재규격": ["50A", "분말", "100A"],
@@ -198,14 +198,14 @@ try:
         })
         
         buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             sample_df.to_excel(writer, index=False, sheet_name='견적서')
         
         st.download_button(
             label="📥 견적서 업로드 양식(샘플 Excel) 다운로드",
             data=buffer.getvalue(),
             file_name="견적서_업로드_양식.xlsx",
-            mime="application/vnd.ms-excel"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -219,12 +219,10 @@ try:
                 if not all(col in q_df.columns for col in required_cols):
                     st.error("엑셀 파일에 '자재명', '자재규격', '수량', '견적단가' 열이 포함되어 있어야 합니다.")
                 else:
-                    # 데이터 병합 및 계산
                     q_df['수량'] = pd.to_numeric(q_df['수량'], errors='coerce').fillna(0)
                     q_df['견적단가'] = pd.to_numeric(q_df['견적단가'], errors='coerce').fillna(0)
                     q_df['견적금액'] = q_df['수량'] * q_df['견적단가']
 
-                    # 사내 DB 매칭
                     merged = pd.merge(q_df, stats_df, on=['자재명', '자재규격'], how='left')
 
                     merged['사내평균단가'] = merged['평균단가'].fillna(0)
@@ -244,7 +242,6 @@ try:
 
                     merged['판정'] = merged.apply(judge_row, axis=1)
 
-                    # 요약 통계
                     total_quote = merged['견적금액'].sum()
                     total_expected = merged['사내예상금액'].sum()
                     diff_total = total_quote - total_expected
@@ -266,28 +263,25 @@ try:
 
                     st.markdown("<br>", unsafe_allow_html=True)
 
-                    # 판정 리스트 상세
                     st.subheader("🔍 품목별 상세 검토 결과")
                     
                     show_cols = ['자재명', '자재규격', '수량', '견적단가', '사내평균단가', '견적금액', '사내예상금액', '판정']
                     result_table = merged[show_cols].copy()
                     
-                    # 화폐 포맷 변경
                     for col in ['견적단가', '사내평균단가', '견적금액', '사내예상금액']:
                         result_table[col] = result_table[col].apply(lambda x: f"{x:,.0f}원")
 
                     st.dataframe(result_table, use_container_width=True)
 
-                    # 엑셀 다운로드 기능
                     out_buffer = io.BytesIO()
-                    with pd.ExcelWriter(out_buffer, engine='xlsxwriter') as writer:
+                    with pd.ExcelWriter(out_buffer, engine='openpyxl') as writer:
                         merged[show_cols].to_excel(writer, index=False, sheet_name='견적검토결과')
                     
                     st.download_button(
                         label="📥 견적 검토 결과서 (Excel) 다운로드",
                         data=out_buffer.getvalue(),
                         file_name="BPM_견적검토_결과보고서.xlsx",
-                        mime="application/vnd.ms-excel"
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
             except Exception as e:
