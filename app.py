@@ -9,18 +9,42 @@ try:
 except ImportError:
     HAS_PDF = False
 
-st.set_page_config(page_title="BPM 자재 단가 검증 시스템", layout="wide", page_icon="⚙️")
+st.set_page_config(page_title="BPM 자재 단가 검증 시스템 (2025년 데이터 기준)", layout="wide", page_icon="⚙️")
 
 @st.cache_data
 def load_bpm_data():
     df = pd.read_excel('BPM 자재 금액대 형성_자재_규격검색기능.xlsx', sheet_name='Data')
-    stats = df.groupby(['자재명', '자재규격'])['입고단가'].agg(
-        이력건수='count',
-        평균단가='mean',
-        최소단가='min',
-        최대단가='max'
-    ).reset_index()
-    stats['평균단가'] = stats['평균단가'].round(0)
+    
+    # 그룹별 절사평균(최상위 1개, 최하위 1개 제외) 계산
+    def calc_trimmed_stats(g):
+        prices = g['입고단가'].dropna().tolist()
+        prices.sort()
+        n = len(prices)
+        
+        if n == 0:
+            return pd.Series({'이력건수': 0, '평균단가': 0, '최소단가': 0, '최대단가': 0, '절사적용': False})
+        
+        min_p = prices[0]
+        max_p = prices[-1]
+        
+        # 5건 이상일 경우 최고/최저 각 1개씩 제외 후 평균 계산 (심사 방식)
+        if n >= 5:
+            trimmed_prices = prices[1:-1]
+            avg_p = sum(trimmed_prices) / len(trimmed_prices)
+            is_trimmed = True
+        else:
+            avg_p = sum(prices) / n
+            is_trimmed = False
+            
+        return pd.Series({
+            '이력건수': n,
+            '평균단가': round(avg_p),
+            '최소단가': min_p,
+            '최대단가': max_p,
+            '절사적용': is_trimmed
+        })
+
+    stats = df.groupby(['자재명', '자재규격'], group_keys=False).apply(calc_trimmed_stats).reset_index()
     stats['검색용'] = stats['자재명'].astype(str) + " | " + stats['자재규격'].astype(str)
     return stats
 
@@ -61,6 +85,7 @@ try:
         "원하는 기능을 선택하세요", 
         ["🔍 단 품목 단가 검증", "📄 업체 견적서 일괄 검토", "📊 자재 데이터 분석"]
     )
+    st.sidebar.caption("💡 DB 기준: 2025년도 자재 구매 이력")
     st.sidebar.markdown("---")
 
     # ====================================================
@@ -79,7 +104,7 @@ try:
                 accept_multiple_files=True
             )
 
-        st.title("⚙️ BPM 자재 단가 검증 시스템")
+        st.title("⚙️ BPM 자재 단가 검증 시스템 (2025년 데이터 기준)")
         
         c_search1, c_search2 = st.columns([1.5, 1.5])
         with c_search1:
@@ -104,22 +129,21 @@ try:
         bpm_avg = int(target_data['평균단가'])
         bpm_max = int(target_data['최대단가'])
         bpm_min = int(target_data['최소단가'])
-
-        is_high_volume = bpm_count >= 5
+        is_trimmed = bool(target_data['절사적용'])
 
         st.divider()
         st.subheader(f"📌 선택 자재: [{selected_material}] ({selected_spec})")
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("사내 구매 이력", f"{bpm_count:,} 건")
-        m2.metric("사내 평균 단가", f"{bpm_avg:,.0f} 원")
         
-        if is_high_volume:
-            m3.metric("과거 최저 단가", "제외됨 (5건 이상)", help="구매 이력이 5건 이상으로 이상치 방지를 위해 제외합니다.")
-            m4.metric("과거 최고 단가", "제외됨 (5건 이상)", help="구매 이력이 5건 이상으로 이상치 방지를 위해 제외합니다.")
+        if is_trimmed:
+            m2.metric("사내 평균 단가 (절사평균)", f"{bpm_avg:,.0f} 원", help="구매이력 5건 이상: 최고가 1개, 최저가 1개를 제외한 평균값입니다.")
         else:
-            m3.metric("과거 최저 단가", f"{bpm_min:,.0f} 원")
-            m4.metric("과거 최고 단가", f"{bpm_max:,.0f} 원")
+            m2.metric("사내 평균 단가", f"{bpm_avg:,.0f} 원")
+            
+        m3.metric("과거 최저 단가", f"{bpm_min:,.0f} 원")
+        m4.metric("과거 최고 단가", f"{bpm_max:,.0f} 원")
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -148,10 +172,10 @@ try:
                 
                 if price_quote <= bpm_avg:
                     st.success(f"🟢 **[사내 이력]** 평균가({bpm_avg:,.0f}원) 대비 **{abs(rate_bpm):.1f}% 저렴 (적정)**")
-                elif not is_high_volume and price_quote <= bpm_max:
+                elif price_quote <= bpm_max:
                     st.warning(f"🟡 **[사내 이력]** 평균가 대비 **{rate_bpm:.1f}% 높음** (과거 최고가 {bpm_max:,.0f}원 이내)")
                 else:
-                    st.error(f"🔴 **[사내 이력]** 평균가({bpm_avg:,.0f}원) 대비 **{rate_bpm:.1f}% 초과 (고가 주의)**")
+                    st.error(f"🔴 **[사내 이력]** 과거 최고가({bpm_max:,.0f}원) 초과 **(고가 주의)**")
 
                 if price_gov > 0:
                     diff_gov = price_quote - price_gov
@@ -165,14 +189,9 @@ try:
 
         st.subheader("📊 단가 데이터 종합 비교")
         comp_data = {
-            "구분": [f"사내 평균가 ({bpm_count}건)", "물가자료 단가", "구매 견적가"],
-            "단가 (원)": [bpm_avg, price_gov, price_quote]
+            "구분": ["사내 최저가", f"사내 평균가 ({bpm_count}건)", "사내 최고가", "물가자료 단가", "구매 견적가"],
+            "단가 (원)": [bpm_min, bpm_avg, bpm_max, price_gov, price_quote]
         }
-        if not is_high_volume:
-            comp_data["구분"].insert(0, "사내 최저가")
-            comp_data["단가 (원)"].insert(0, bpm_min)
-            comp_data["구분"].insert(2, "사내 최고가")
-            comp_data["단가 (원)"].insert(2, bpm_max)
 
         comp_df = pd.DataFrame(comp_data)
         tbl_col, chart_col = st.columns([1, 1])
@@ -185,11 +204,10 @@ try:
     # 📄 PAGE 2: 업체 견적서 일괄 검토
     # ====================================================
     elif page == "📄 업체 견적서 일괄 검토":
-        st.title("📄 업체 제출 견적서 일괄 검토")
+        st.title("📄 업체 제출 견적서 일괄 검토 (2025년 데이터 기준)")
         st.caption("업체에서 제출한 엑셀 견적서를 업로드하면, 사내 단가 DB와 자동으로 비교하여 적정성을 일괄 심사합니다.")
         st.divider()
 
-        # openpyxl 엔진 사용으로 오류 방지
         sample_df = pd.DataFrame({
             "자재명": ["볼밸브", "고분자응집제", "가스켓"],
             "자재규격": ["50A", "분말", "100A"],
@@ -291,8 +309,8 @@ try:
     # 📈 PAGE 3: 자재 데이터 분석
     # ====================================================
     else:
-        st.title("📊 사내 자재 데이터 종합 분석")
-        st.caption("누적된 자재 구매 이력을 바탕으로 자주 구매하는 자재와 단가 형성 추이를 분석합니다.")
+        st.title("📊 사내 자재 데이터 종합 분석 (2025년 데이터 기준)")
+        st.caption("누적된 2025년도 자재 구매 이력을 바탕으로 자주 구매하는 자재와 단가 형성 추이를 분석합니다.")
         st.divider()
 
         a_col1, a_col2 = st.columns(2)
