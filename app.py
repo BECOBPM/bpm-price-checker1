@@ -11,7 +11,7 @@ except ImportError:
 st.set_page_config(page_title="자재 단가 & 물가자료 통합 비교 시스템", layout="wide")
 
 st.title("📦 사내 이력 & 물가자료 통합 비교 판정 시스템")
-st.caption("사내 거래가 + 물가자료 단가 + 견적 단가를 한 화면에서 직접 교차 분석합니다.")
+st.caption("사내 거래가 + 구매 이력 건수 + 물가자료 단가 + 견적 단가를 한 화면에서 직접 교차 분석합니다.")
 
 # 1. 사내 엑셀 데이터 로드
 @st.cache_data
@@ -42,7 +42,7 @@ def search_in_pdf(pdf_file, keyword):
                             clean_nums = []
                             for n in numbers:
                                 val = int(n.replace(',', ''))
-                                if val > 100: # 단순 페이지수 등 제외
+                                if val > 100:
                                     clean_nums.append(val)
                             results.append({
                                 '파일명': pdf_file.name,
@@ -83,9 +83,13 @@ try:
         
         selected_material = target_data['자재명']
         selected_spec = target_data['자재규격']
+        bpm_count = int(target_data['이력건수']) # 사내 구매 이력 건수
         bpm_avg = int(target_data['평균단가'])
         bpm_max = int(target_data['최대단가'])
         bpm_min = int(target_data['최소단가'])
+
+        # 자재 선택 하단에 바로 이력 건수 강조 카드 표시
+        st.info(f"📊 **[{selected_material}]** 의 사내 구매 이력: 총 **{bpm_count:,}건**")
 
     # PDF/엑셀 자동 검색 단가 파싱
     auto_price_price = 0
@@ -119,14 +123,13 @@ try:
     with c3:
         st.subheader("3. 🎯 통합 단가 비교 판정")
         
-        # 3가지 기준 종합 판정 로직
         if price_quote == 0:
             st.info("견적 단가를 입력해 주세요.")
         else:
             diff_bpm = price_quote - bpm_avg
             rate_bpm = (diff_bpm / bpm_avg) * 100
             
-            st.markdown("#### **[사내 거래가 대비]**")
+            st.markdown(f"#### **[사내 거래가 대비 (총 {bpm_count:,}건 이력)]**")
             if price_quote <= bpm_avg:
                 st.success(f"🟢 사내 평균가({bpm_avg:,.0f}원) 대비 **{abs(rate_bpm):.1f}% 저렴/적정**")
             elif price_quote <= bpm_max:
@@ -148,10 +151,10 @@ try:
     st.divider()
 
     # 4. 한눈에 보는 비교 표 & 그래프
-    st.subheader(f"📊 [{selected_material} - {selected_spec}] 단가 종합 비교표")
+    st.subheader(f"📊 [{selected_material} - {selected_spec}] 단가 종합 비교표 (사내 구매 이력: 총 {bpm_count:,}건)")
     
     comp_data = {
-        "구분": ["사내 최저가", "사내 평균가", "사내 최고가", "물가자료 단가", "구매 견적가"],
+        "구분": ["사내 최저가", f"사내 평균가 ({bpm_count}건 평균)", "사내 최고가", "물가자료 단가", "구매 견적가"],
         "단가 (원)": [bpm_min, bpm_avg, bpm_max, price_gov, price_quote],
         "견적가 대비 차액": [
             f"{price_quote - bpm_min:+,.0f}원" if price_quote else "-",
@@ -169,7 +172,6 @@ try:
         st.table(comp_df)
     
     with col_chart:
-        # 막대 그래프로 한눈에 비교
         chart_df = comp_df[comp_df["단가 (원)"] > 0].set_index("구분")
         st.bar_chart(chart_df["단가 (원)"])
 
