@@ -10,20 +10,19 @@ except ImportError:
 
 st.set_page_config(page_title="BPM 자재 단가 검증 시스템", layout="wide", page_icon="⚙️")
 
-# 자재 자동 카테고리 분류 함수
-def classify_category(name):
+# 단가계약 성격 자재 자동 분류 함수
+def classify_contract_type(name):
     name_str = str(name)
-    mech_keywords = ['밸브', '펌프', '구리스', '배관', '보일러', '압축기', '모터', '가스', '오일', '필터', '패킹', '가스켓', '볼트', '베어링', '배관재', '수동', '유압']
-    elec_keywords = ['차단기', '케이블', '전선', '스위치', '조명', '등', '트랜스', '변압기', '센서', '전기', '배전', '콘센트', '소켓']
-    civil_keywords = ['시멘트', '아스콘', '골재', '방수', '배수로', '측구', '관', '토목', '페인트', '타일', '철근', '콘크리트']
-
-    for k in elec_keywords:
-        if k in name_str:
-            return '전기'
-    for k in civil_keywords:
-        if k in name_str:
-            return '토목'
-    return '기계' # 기본값 기계
+    # 연간 단가계약 대표 키워드
+    contract_keywords = [
+        '응집제', '약품', '가성소다', '염소', '소독제', '활성탄', 
+        '가스', '질소', '산소', '아세틸렌', '오일', '윤활유', '구리스', 
+        '필터', '용역', '위탁'
+    ]
+    for kw in contract_keywords:
+        if kw in name_str:
+            return '단가계약'
+    return '일반구매'
 
 @st.cache_data
 def load_bpm_data():
@@ -36,7 +35,7 @@ def load_bpm_data():
     ).reset_index()
     stats['평균단가'] = stats['평균단가'].round(0)
     stats['검색용'] = stats['자재명'].astype(str) + " | " + stats['자재규격'].astype(str)
-    stats['카테고리'] = stats['자재명'].apply(classify_category)
+    stats['계약유형'] = stats['자재명'].apply(classify_contract_type)
     return stats
 
 def search_in_pdf(pdf_file, keyword):
@@ -69,46 +68,42 @@ try:
     stats_df = load_bpm_data()
 
     # ----------------------------------------------------
-    # 📌 1. 왼쪽 사이드바: 분야별 카테고리 & 자주 산 리스트
+    # 📌 1. 왼쪽 사이드바: 구매 유형 필터 및 TOP 자재
     # ----------------------------------------------------
-    st.sidebar.title("🛠️ 분야별 자재 목차")
+    st.sidebar.title("📦 구매 유형 선택")
     
-    # [1] 분야 선택 (기계 / 전기 / 토목 / 전체)
-    selected_cat = st.sidebar.radio(
-        "분야 선택",
-        ["🔧 기계설비", "⚡ 전기설비", "🏗️ 토목/건축", "📂 전체보기"],
+    # [새로운 기능] 단가계약 vs 일반구매 필터
+    contract_filter = st.sidebar.radio(
+        "분류 기준 선택",
+        ["📂 전체 품목", "💳 연간 단가계약 품목", "🛒 일반 구매 자재"],
         index=0
     )
-    
-    cat_map = {
-        "🔧 기계설비": "기계",
-        "⚡ 전기설비": "전기",
-        "🏗️ 토목/건축": "토목",
-        "📂 전체보기": "전체"
-    }
-    cat_filter = cat_map[selected_cat]
 
-    if cat_filter == "전체":
-        cat_df = stats_df
+    # 선택된 필터에 따라 데이터 프레임 걸러내기
+    if contract_filter == "💳 연간 단가계약 품목":
+        view_df = stats_df[stats_df['계약유형'] == '단가계약']
+    elif contract_filter == "🛒 일반 구매 자재":
+        view_df = stats_df[stats_df['계약유형'] == '일반구매']
     else:
-        cat_df = stats_df[stats_df['카테고리'] == cat_filter]
+        view_df = stats_df
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🔥 자주 구매한 자재 (TOP)")
+    st.sidebar.title("⭐ 자주 산 자재 (TOP 30)")
+    st.sidebar.caption(f"[{contract_filter}] 기준 구매 이력 상위 품목입니다.")
     
-    # 구매 건수가 많은 순으로 정렬
-    top_items_df = cat_df.sort_values(by='이력건수', ascending=False)
+    # 걸러진 데이터에서 이력건수 순 내림차순
+    top30_df = view_df.sort_values(by='이력건수', ascending=False).head(30)
     
-    if len(top_items_df) > 0:
-        top_list = top_items_df['검색용'].tolist()[:15] # 상위 15개
-        selected_from_sidebar = st.sidebar.selectbox("자주 산 리스트에서 선택", top_list)
+    if len(top30_df) > 0:
+        top30_list = top30_df['검색용'].tolist()
+        selected_from_sidebar = st.sidebar.selectbox("목록에서 바로 선택", top30_list)
     else:
-        st.sidebar.info("해당 카테고리에 등록된 자재가 없습니다.")
+        st.sidebar.warning("해당 유형의 자재가 없습니다.")
         selected_from_sidebar = stats_df['검색용'].iloc[0]
 
     st.sidebar.markdown("---")
     
-    # [2] 파일 업로드는 사이드바 맨 아래 접이식으로 이동
+    # 부가 기능 (물가자료 첨부) 접이식
     with st.sidebar.expander("📁 물가자료 PDF/Excel 첨부 (선택)", expanded=False):
         uploaded_files = st.file_uploader(
             "물가지 파일 첨부",
@@ -117,24 +112,27 @@ try:
         )
 
     # ----------------------------------------------------
-    # 🌟 2. 메인 화면: 자재 선택 & 단가 비교
+    # 🌟 2. 메인 화면: 키워드 검색 & 선택
     # ----------------------------------------------------
     st.title("⚙️ BPM 자재 단가 검증 시스템")
     
-    # 직접 직접 키워드 검색도 가능하게 상단 배치
-    c_search1, c_search2 = st.columns([2, 1])
-    with c_search1:
-        search_kw = st.text_input("🔍 목록에 없는 자재 직접 키워드 검색 (선택사항)", "").strip()
+    c_search1, c_search2 = st.columns([1.5, 1.5])
     
-    if search_kw:
-        search_filtered = stats_df[stats_df['검색용'].str.contains(search_kw, case=False, na=False)]
-        if len(search_filtered) > 0:
-            selected_item = st.selectbox("검색 결과 자재 선택", search_filtered['검색용'].tolist())
+    with c_search1:
+        search_kw = st.text_input("🔍 자재명 / 규격 키워드 검색", "", placeholder="예: 응집제, 구리스, 밸브, 50A").strip()
+    
+    with c_search2:
+        if search_kw:
+            # 검색 시에도 선택된 구매 유형 내에서 검색
+            search_filtered = view_df[view_df['검색용'].str.contains(search_kw, case=False, na=False)]
+            if len(search_filtered) > 0:
+                selected_item = st.selectbox(f"검색결과 ({len(search_filtered)}건) 중 선택", search_filtered['검색용'].tolist())
+            else:
+                st.warning("일치하는 자재가 없습니다. TOP 30 선택 품목으로 표시합니다.")
+                selected_item = selected_from_sidebar
         else:
-            st.warning("검색 결과가 없습니다. 목차에서 선택한 자재로 표시합니다.")
             selected_item = selected_from_sidebar
-    else:
-        selected_item = selected_from_sidebar
+            st.selectbox("선택된 자재 (TOP 30 연동)", [selected_item], disabled=True)
 
     # 선택된 자재 데이터 가공
     target_data = stats_df[stats_df['검색용'] == selected_item].iloc[0]
@@ -144,15 +142,17 @@ try:
     bpm_avg = int(target_data['평균단가'])
     bpm_max = int(target_data['최대단가'])
     bpm_min = int(target_data['최소단가'])
+    contract_type = target_data['계약유형']
 
     st.divider()
 
     # ----------------------------------------------------
-    # 3. 선택 자재 정보 및 3중 비교 레이아웃
+    # 3. 핵심 정보 및 3중 비교 판정
     # ----------------------------------------------------
-    st.subheader(f"📌 선택 자재: [{selected_material}] ({selected_spec})")
+    type_badge = "💳 [연간 단가계약 품목]" if contract_type == '단가계약' else "🛒 [일반 구매 품목]"
+    st.subheader(f"📌 선택 자재: [{selected_material}] ({selected_spec})  {type_badge}")
     
-    # 핵심 통계 지표 (Metric Cards)
+    # 4대 수치 카드
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("사내 구매 이력", f"{bpm_count:,} 건")
     m2.metric("사내 평균 단가", f"{bpm_avg:,.0f} 원")
@@ -161,10 +161,7 @@ try:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 단가 입력 및 판정 (2열 구조)
-    col_input, col_result = st.columns([1, 1.2])
-
-    # PDF/엑셀 자동 검색 단가 파싱
+    # PDF/엑셀 자동 파싱
     auto_price_price = 0
     if 'uploaded_files' in locals() and uploaded_files:
         pdf_hits = []
@@ -173,6 +170,9 @@ try:
                 pdf_hits.extend(search_in_pdf(f, selected_material))
         if pdf_hits and pdf_hits[0]['단가후보']:
             auto_price_price = pdf_hits[0]['단가후보'][0]
+
+    # 입력 & 판정 레이아웃
+    col_input, col_result = st.columns([1, 1.2])
 
     with col_input:
         st.markdown("### 💳 단가 입력")
@@ -207,7 +207,7 @@ try:
     st.divider()
 
     # ----------------------------------------------------
-    # 4. 하단 비교표 및 그래프
+    # 4. 하단 데이터 종합 비교
     # ----------------------------------------------------
     st.subheader("📊 단가 데이터 종합 비교")
     
