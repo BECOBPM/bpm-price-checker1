@@ -8,67 +8,23 @@ try:
 except ImportError:
     HAS_PDF = False
 
-# 1. 페이지 설정 (넓게, 타이틀 깔끔하게)
-st.set_page_config(page_title="BPM 자재 단가 검증 시스템", layout="wide", page_icon="📈")
+st.set_page_config(page_title="BPM 자재 단가 검증 시스템", layout="wide", page_icon="⚙️")
 
-# 맞춤형 CSS로 디자인 커스터마이징
-st.markdown("""
-    <style>
-    /* 상단 여백 제거 및 전체 배경색 */
-    .block-container {
-        padding-top: 1rem;
-        background-color: #f8f9fa;
-    }
-    /* 타이틀 디자인 */
-    .stTitle {
-        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-        font-weight: 800;
-        letter-spacing: -0.05rem;
-        margin-bottom: 0.5rem;
-    }
-    .stCaption {
-        margin-bottom: 2rem;
-    }
-    /* 섹션 제목 디자인 */
-    h3 {
-        font-size: 1.1rem;
-        font-weight: 700;
-        margin-bottom: 0.8rem;
-    }
-    /* 정보 카드 디자인 */
-    .info-card {
-        background-color: white;
-        border-radius: 10px;
-        padding: 1rem;
-        border: 1px solid #e9ecef;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        margin-bottom: 1rem;
-    }
-    .info-card h4 {
-        margin: 0;
-        color: #6c757d;
-        font-size: 0.85rem;
-        font-weight: 600;
-    }
-    .info-card p {
-        margin: 0.2rem 0 0 0;
-        font-size: 1.2rem;
-        font-weight: 700;
-    }
-    /* 파일 업로드 Expander 디자인 */
-    .stExpander {
-        border-radius: 10px;
-    }
-    /* 표 디자인 최적화 */
-    [data-testid="stTable"] {
-        border-radius: 10px;
-        overflow: hidden;
-        border: 1px solid #e9ecef;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# 자재 자동 카테고리 분류 함수
+def classify_category(name):
+    name_str = str(name)
+    mech_keywords = ['밸브', '펌프', '구리스', '배관', '보일러', '압축기', '모터', '가스', '오일', '필터', '패킹', '가스켓', '볼트', '베어링', '배관재', '수동', '유압']
+    elec_keywords = ['차단기', '케이블', '전선', '스위치', '조명', '등', '트랜스', '변압기', '센서', '전기', '배전', '콘센트', '소켓']
+    civil_keywords = ['시멘트', '아스콘', '골재', '방수', '배수로', '측구', '관', '토목', '페인트', '타일', '철근', '콘크리트']
 
-# 함수 정의 (이전과 동일)
+    for k in elec_keywords:
+        if k in name_str:
+            return '전기'
+    for k in civil_keywords:
+        if k in name_str:
+            return '토목'
+    return '기계' # 기본값 기계
+
 @st.cache_data
 def load_bpm_data():
     df = pd.read_excel('BPM 자재 금액대 형성_자재_규격검색기능.xlsx', sheet_name='Data')
@@ -80,6 +36,7 @@ def load_bpm_data():
     ).reset_index()
     stats['평균단가'] = stats['평균단가'].round(0)
     stats['검색용'] = stats['자재명'].astype(str) + " | " + stats['자재규격'].astype(str)
+    stats['카테고리'] = stats['자재명'].apply(classify_category)
     return stats
 
 def search_in_pdf(pdf_file, keyword):
@@ -112,58 +69,101 @@ try:
     stats_df = load_bpm_data()
 
     # ----------------------------------------------------
-    # 🌟 메인 화면 시작: 타이틀
+    # 📌 1. 왼쪽 사이드바: 분야별 카테고리 & 자주 산 리스트
     # ----------------------------------------------------
-    st.title("📈 BPM 자재 단가 검증 대시보드")
-    st.caption("사내 거래가 + 물가자료 + 견적가 데이터를 기반으로 구매 단가의 적정성을 다각도로 검증합니다.")
+    st.sidebar.title("🛠️ 분야별 자재 목차")
+    
+    # [1] 분야 선택 (기계 / 전기 / 토목 / 전체)
+    selected_cat = st.sidebar.radio(
+        "분야 선택",
+        ["🔧 기계설비", "⚡ 전기설비", "🏗️ 토목/건축", "📂 전체보기"],
+        index=0
+    )
+    
+    cat_map = {
+        "🔧 기계설비": "기계",
+        "⚡ 전기설비": "전기",
+        "🏗️ 토목/건축": "토목",
+        "📂 전체보기": "전체"
+    }
+    cat_filter = cat_map[selected_cat]
 
-    # ----------------------------------------------------
-    # [섹션 0] 물가자료 관리 (Expander)
-    # ----------------------------------------------------
-    with st.expander("📁 [물가자료 파일 등록] 한국물가정보 / 물가자료 PDF·엑셀 관리", expanded=False):
+    if cat_filter == "전체":
+        cat_df = stats_df
+    else:
+        cat_df = stats_df[stats_df['카테고리'] == cat_filter]
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔥 자주 구매한 자재 (TOP)")
+    
+    # 구매 건수가 많은 순으로 정렬
+    top_items_df = cat_df.sort_values(by='이력건수', ascending=False)
+    
+    if len(top_items_df) > 0:
+        top_list = top_items_df['검색용'].tolist()[:15] # 상위 15개
+        selected_from_sidebar = st.sidebar.selectbox("자주 산 리스트에서 선택", top_list)
+    else:
+        st.sidebar.info("해당 카테고리에 등록된 자재가 없습니다.")
+        selected_from_sidebar = stats_df['검색용'].iloc[0]
+
+    st.sidebar.markdown("---")
+    
+    # [2] 파일 업로드는 사이드바 맨 아래 접이식으로 이동
+    with st.sidebar.expander("📁 물가자료 PDF/Excel 첨부 (선택)", expanded=False):
         uploaded_files = st.file_uploader(
-            "공인 물가지 PDF 또는 엑셀 파일들을 선택해 주세요 (다중 선택 가능)",
+            "물가지 파일 첨부",
             type=['pdf', 'xlsx', 'xls'],
             accept_multiple_files=True
         )
-        if uploaded_files:
-            st.success(f"총 {len(uploaded_files)}개의 물가자료 파일이 성공적으로 등록되었습니다.")
-
-    st.divider()
-
-    # 데이터 변수 초기화
-    filtered_df = stats_df
 
     # ----------------------------------------------------
-    # [섹션 1] 자재 검색 (메인 화면 중앙에 배치)
+    # 🌟 2. 메인 화면: 자재 선택 & 단가 비교
     # ----------------------------------------------------
-    c1, _ = st.columns([1, 2])
-    with c1:
-        st.subheader("1. 대상 자재 검색")
-        search_keyword = st.text_input("🔍 자재명 또는 규격 키워드 입력", "구리스").strip()
-        
-        filtered_df = stats_df[stats_df['검색용'].str.contains(search_keyword, case=False, na=False)] if search_keyword else stats_df
-
-        if len(filtered_df) == 0:
-            st.error("❌ 해당 검색어의 사내 자재가 없습니다.")
-            st.stop()
-            
-        selected_item = st.selectbox("검색 결과에서 자재 선택", filtered_df['검색용'].tolist())
-        target_data = filtered_df[filtered_df['검색용'] == selected_item].iloc[0]
-        
-        selected_material = target_data['자재명']
-        selected_spec = target_data['자재규격']
-        bpm_count = int(target_data['이력건수'])
-        bpm_avg = int(target_data['평균단가'])
-        bpm_max = int(target_data['최대단가'])
-        bpm_min = int(target_data['최소단가'])
-
-    st.divider()
-
-    # ----------------------------------------------------
-    # [섹션 2] 핵심 정보 카드 및 단가 입력 (세련된 레이아웃)
-    # ----------------------------------------------------
+    st.title("⚙️ BPM 자재 단가 검증 시스템")
     
+    # 직접 직접 키워드 검색도 가능하게 상단 배치
+    c_search1, c_search2 = st.columns([2, 1])
+    with c_search1:
+        search_kw = st.text_input("🔍 목록에 없는 자재 직접 키워드 검색 (선택사항)", "").strip()
+    
+    if search_kw:
+        search_filtered = stats_df[stats_df['검색용'].str.contains(search_kw, case=False, na=False)]
+        if len(search_filtered) > 0:
+            selected_item = st.selectbox("검색 결과 자재 선택", search_filtered['검색용'].tolist())
+        else:
+            st.warning("검색 결과가 없습니다. 목차에서 선택한 자재로 표시합니다.")
+            selected_item = selected_from_sidebar
+    else:
+        selected_item = selected_from_sidebar
+
+    # 선택된 자재 데이터 가공
+    target_data = stats_df[stats_df['검색용'] == selected_item].iloc[0]
+    selected_material = target_data['자재명']
+    selected_spec = target_data['자재규격']
+    bpm_count = int(target_data['이력건수'])
+    bpm_avg = int(target_data['평균단가'])
+    bpm_max = int(target_data['최대단가'])
+    bpm_min = int(target_data['최소단가'])
+
+    st.divider()
+
+    # ----------------------------------------------------
+    # 3. 선택 자재 정보 및 3중 비교 레이아웃
+    # ----------------------------------------------------
+    st.subheader(f"📌 선택 자재: [{selected_material}] ({selected_spec})")
+    
+    # 핵심 통계 지표 (Metric Cards)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("사내 구매 이력", f"{bpm_count:,} 건")
+    m2.metric("사내 평균 단가", f"{bpm_avg:,.0f} 원")
+    m3.metric("과거 최저 단가", f"{bpm_min:,.0f} 원")
+    m4.metric("과거 최고 단가", f"{bpm_max:,.0f} 원")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 단가 입력 및 판정 (2열 구조)
+    col_input, col_result = st.columns([1, 1.2])
+
     # PDF/엑셀 자동 검색 단가 파싱
     auto_price_price = 0
     if 'uploaded_files' in locals() and uploaded_files:
@@ -171,109 +171,57 @@ try:
         for f in uploaded_files:
             if f.name.lower().endswith('.pdf') and HAS_PDF:
                 pdf_hits.extend(search_in_pdf(f, selected_material))
-        
         if pdf_hits and pdf_hits[0]['단가후보']:
             auto_price_price = pdf_hits[0]['단가후보'][0]
 
-    # 화면 구성: 정보 카드 / 입력 / 판정
-    row1_c1, row1_c2, row1_c3, row1_c4 = st.columns([1.2, 1.2, 1, 1.5])
+    with col_input:
+        st.markdown("### 💳 단가 입력")
+        price_gov = st.number_input("📑 물가자료 공인 단가 (원)", min_value=0, value=auto_price_price, step=1000)
+        price_quote = st.number_input("💵 구매/견적 예정 단가 (원)", min_value=0, value=bpm_avg, step=1000)
 
-    with row1_c1:
-        st.markdown(f"""
-            <div class="info-card">
-                <h4>선택된 자재명</h4>
-                <p>📊 {selected_material}</p>
-            </div>
-            <div class="info-card">
-                <h4>규격</h4>
-                <p>📋 {selected_spec}</p>
-            </div>
-        """, unsafe_allow_html=True)
-
-    with row1_c2:
-        st.markdown(f"""
-            <div class="info-card">
-                <h4>사내 구매 이력</h4>
-                <p>✅ 총 {bpm_count:,}건</p>
-            </div>
-            <div class="info-card" style="background-color: #e9ecef; border-color: #dee2e6;">
-                <h4>사내 평균 단가</h4>
-                <p style="color: #495057;">💰 {bpm_avg:,.0f}원</p>
-            </div>
-        """, unsafe_allow_html=True)
-
-    with row1_c3:
-        st.subheader("2. 단가 정보 입력")
-        price_gov = st.number_input(
-            "📑 물가자료 단가 (원)", 
-            min_value=0, 
-            value=auto_price_price, 
-            step=1000
-        )
-        price_quote = st.number_input(
-            "💳 구매 견적 단가 (원)", 
-            min_value=0, 
-            value=bpm_avg, 
-            step=1000
-        )
-
-    with row1_c4:
-        st.subheader("3. 🎯 통합 단가 검증 판정")
+    with col_result:
+        st.markdown("### 🎯 적정성 판정 결과")
         if price_quote == 0:
             st.info("견적 단가를 입력해 주세요.")
         else:
             diff_bpm = price_quote - bpm_avg
             rate_bpm = (diff_bpm / bpm_avg) * 100
             
-            bpm_text = ""
+            # 사내 이력 비교
             if price_quote <= bpm_avg:
-                bpm_text = f"<span style='color: green;'>🟢 사내 평균가 대비 {abs(rate_bpm):.1f}% 저렴 (적정)</span>"
+                st.success(f"🟢 **[사내 이력]** 평균가({bpm_avg:,.0f}원) 대비 **{abs(rate_bpm):.1f}% 저렴 (적정)**")
             elif price_quote <= bpm_max:
-                bpm_text = f"<span style='color: orange;'>🟡 사내 평균가 대비 {rate_bpm:.1f}% 높음 (과거 최고가 이내)</span>"
+                st.warning(f"🟡 **[사내 이력]** 평균가 대비 **{rate_bpm:.1f}% 높음** (과거 최고가 {bpm_max:,.0f}원 이내)")
             else:
-                bpm_text = f"<span style='color: red;'>🔴 사내 최고가({bpm_max:,.0f}원) 대비 {rate_bpm:.1f}% 초과 (고가)</span>"
-            
-            st.markdown(f"**[사내 이력 분석]**<br>{bpm_text}", unsafe_allow_html=True)
+                st.error(f"🔴 **[사내 이력]** 과거 최고가({bpm_max:,.0f}원) 대비 **{rate_bpm:.1f}% 초과 (고가)**")
 
-            gov_text = ""
-            if price_gov == 0:
-                gov_text = "⚪ 물가자료 단가 미입력"
-            else:
+            # 물가자료 비교
+            if price_gov > 0:
                 diff_gov = price_quote - price_gov
                 rate_gov = (diff_gov / price_gov) * 100
                 if price_quote <= price_gov:
-                    gov_text = f"<span style='color: green;'>🟢 물가자료가 대비 {abs(rate_gov):.1f}% 저렴 (적정)</span>"
+                    st.success(f"🟢 **[물가자료]** 공인가({price_gov:,.0f}원) 대비 **{abs(rate_gov):.1f}% 저렴 (적정)**")
                 else:
-                    gov_text = f"<span style='color: red;'>🔴 물가자료가 대비 {rate_gov:.1f}% 높음</span>"
-            
-            st.markdown(f"**[물가자료 분석]**<br>{gov_text}", unsafe_allow_html=True)
+                    st.error(f"🔴 **[물가자료]** 공인가({price_gov:,.0f}원) 대비 **{rate_gov:.1f}% 비쌈**")
 
     st.divider()
 
     # ----------------------------------------------------
-    # [섹션 3] 종합 비교표 및 그래프
+    # 4. 하단 비교표 및 그래프
     # ----------------------------------------------------
-    st.subheader("📊 단가 종합 비교 및 차트")
+    st.subheader("📊 단가 데이터 종합 비교")
     
-    comp_data = {
+    comp_df = pd.DataFrame({
         "구분": ["사내 최저가", f"사내 평균가 ({bpm_count}건)", "사내 최고가", "물가자료 단가", "구매 견적가"],
-        "단가 (원)": [f"{bpm_min:,.0f}원", f"{bpm_avg:,.0f}원", f"{bpm_max:,.0f}원", f"{price_gov:,.0f}원", f"{price_quote:,.0f}원"],
-        "비고": ["과거 최저 거래가", "과거 평균 거래가", "과거 최고 거래가", "공인 물가지 단가", "업체 견적/구매가"]
-    }
-    comp_df = pd.DataFrame(comp_data)
+        "단가 (원)": [bpm_min, bpm_avg, bpm_max, price_gov, price_quote]
+    })
     
-    col_tbl, col_chart = st.columns([1.5, 1])
-    with col_tbl:
-        st.table(comp_df)
+    tbl_col, chart_col = st.columns([1, 1])
+    with tbl_col:
+        st.table(comp_df.assign(단가=comp_df["단가 (원)"].apply(lambda x: f"{x:,.0f}원"))[["구분", "단가"]])
     
-    with col_chart:
-        # 차트용 데이터는 숫자형으로 다시 계산
-        chart_data = {
-            "구분": ["최저가", "평균가", "최고가", "물가자료", "견적가"],
-            "단가": [bpm_min, bpm_avg, bpm_max, price_gov, price_quote]
-        }
-        chart_df = pd.DataFrame(chart_data).set_index("구분")
-        st.bar_chart(chart_df["단가"])
+    with chart_col:
+        st.bar_chart(comp_df[comp_df["단가 (원)"] > 0].set_index("구분"))
 
 except Exception as e:
-    st.error(f"시스템 실행 중 예기치 않은 오류가 발생했습니다. 데이터를 확인해 주세요.\n\n오류 내용: {e}")
+    st.error(f"시스템 오류 발생: {e}")
