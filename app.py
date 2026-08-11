@@ -62,16 +62,15 @@ st.markdown("""
     .quote-box {
         background-color: #ebf5ff;
         border-left: 6px solid #1565c0;
-        padding: 16px;
+        padding: 12px 16px;
         border-radius: 8px;
         margin-top: 10px;
-        margin-bottom: 15px;
+        margin-bottom: 10px;
     }
     .quote-title {
         color: #0d47a1;
         font-weight: 700;
         font-size: 15px;
-        margin-bottom: 5px;
     }
     
     /* 버튼 스타일 */
@@ -99,7 +98,7 @@ def show_missing_price_dialog():
     st.write("공인 단가지(물가정보, 물가자료 등)를 검토하셨는지 다시 한번 확인해 주세요.")
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("확인 및 검토 진행", use_container_width=True):
-        st.session_state['dialog_shown'] = True
+        st.session_state['dialog_dismissed'] = True
         st.rerun()
 
 
@@ -265,33 +264,30 @@ try:
             st.markdown('<div class="custom-card">', unsafe_allow_html=True)
             st.markdown("#### 💳 비교 단가 입력")
             
-            price_info = st.number_input("📑 물가정보 공인 단가 (원)", min_value=0, value=0, step=1000)
-            price_data = st.number_input("📑 물가자료 공인 단가 (원)", min_value=0, value=auto_price_price, step=1000)
-            
-            # 물가자료/정보 미입력 상태 카드 안내
-            if price_info == 0 and price_data == 0:
-                st.info("💡 **물가정보 및 물가자료는 검토하셨습니까?** (미입력 상태)")
+            # 입력 폼 적용 (Enter 키 누르거나 제출 버튼 클릭 시에만 판정 실행)
+            with st.form(key='price_input_form'):
+                price_info = st.number_input("📑 물가정보 공인 단가 (원)", min_value=0, value=0, step=1000)
+                price_data = st.number_input("📑 물가자료 공인 단가 (원)", min_value=0, value=auto_price_price, step=1000)
+                
+                if price_info == 0 and price_data == 0:
+                    st.info("💡 **물가정보 및 물가자료는 검토하셨습니까?** (미입력 상태)")
 
-            # 구매견적가 파란색 강조 UI
-            st.markdown("""
-            <div class="quote-box">
-                <div class="quote-title">🟦 구매 / 견적 예정 단가 (검토 대상)</div>
-            </div>
-            """, unsafe_allow_html=True)
-            price_quote = st.number_input("구매견적가 입력 (원)", min_value=0, value=bpm_avg, step=1000, label_visibility="collapsed")
+                st.markdown("""
+                <div class="quote-box">
+                    <div class="quote-title">🟦 구매 / 견적 예정 단가 (검토 대상)</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                price_quote = st.number_input("구매견적가 입력 (원)", min_value=0, value=bpm_avg, step=1000, label_visibility="collapsed")
+                
+                # 엔터 또는 클릭으로 실행할 수 있는 검토 버튼
+                submit_button = st.form_submit_button("🔍 단가 검토 및 팝업 확인 (Enter)", use_container_width=True)
+
             st.markdown('</div>', unsafe_allow_html=True)
 
-            # ----------------------------------------------------
-            # 팝업(Dialog) 트리거 조건 확인
-            # 견적가가 입력되어 있고 + 물가정보/자료 둘 다 0원일 때 팝업 출력
-            # ----------------------------------------------------
-            current_key = f"{selected_item}_{price_quote}_{price_info}_{price_data}"
-            if 'last_key' not in st.session_state or st.session_state['last_key'] != current_key:
-                st.session_state['last_key'] = current_key
-                st.session_state['dialog_shown'] = False
-
-            if price_quote > 0 and price_info == 0 and price_data == 0:
-                if not st.session_state.get('dialog_shown', False):
+            # 제출 버튼을 누르거나 엔터를 쳤을 때, 물가정보/자료가 0원이면 팝업 출력
+            if submit_button:
+                if price_quote > 0 and price_info == 0 and price_data == 0:
                     show_missing_price_dialog()
 
         with col_result:
