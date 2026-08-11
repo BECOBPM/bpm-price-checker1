@@ -101,7 +101,7 @@ try:
         selected_from_sidebar = st.sidebar.selectbox("목록에서 바로 선택", top30_df['검색용'].tolist())
 
         st.sidebar.markdown("---")
-        with st.sidebar.expander("📁 물가자료 PDF/Excel 첨부 (선택)", expanded=False):
+        with st.sidebar.expander("📁 물가자료/정보 PDF/Excel 첨부 (선택)", expanded=False):
             uploaded_files = st.file_uploader(
                 "물가지 파일 첨부",
                 type=['pdf', 'xlsx', 'xls'],
@@ -163,14 +163,32 @@ try:
         col_input, col_result = st.columns([1, 1.2])
         with col_input:
             st.markdown("### 💳 단가 입력")
-            price_gov = st.number_input("📑 물가자료 공인 단가 (원)", min_value=0, value=auto_price_price, step=1000)
-            price_quote = st.number_input("💵 구매/견적 예정 단가 (원)", min_value=0, value=bpm_avg, step=1000)
+            price_info = st.number_input("📑 물가정보 공인 단가 (원)", min_value=0, value=0, step=1000)
+            price_data = st.number_input("📑 물가자료 공인 단가 (원)", min_value=0, value=auto_price_price, step=1000)
+            
+            # 2. 물가정보/물가자료 둘 다 0원(미입력)일 때 안내 문구 팝업
+            if price_info == 0 and price_data == 0:
+                st.info("💡 **물가정보 및 물가자료는 검토하셨습니까?** (미입력 상태입니다)")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # 3. 구매견적가 시각적 강조 (파란색 하이라이트 박스)
+            st.markdown("""
+            <div style="background-color: #e8f4f8; padding: 12px; border-radius: 8px; border-left: 5px solid #1E88E5;">
+                <h4 style="margin:0; color: #1565C0; font-size: 16px;">🟦 구매 / 견적 예정 단가</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            price_quote = st.number_input("구매견적가 입력 (원)", min_value=0, value=bpm_avg, step=1000, label_visibility="collapsed")
 
         with col_result:
             st.markdown("### 🎯 적정성 판정 결과")
             if price_quote == 0:
                 st.info("견적 단가를 입력해 주세요.")
             else:
+                # 3. 견적가 강조 표시
+                st.markdown(f"#### 🟦 **검토 대상 구매견적가: <span style='color:#1565C0;'>{price_quote:,.0f}원</span>**", unsafe_allow_html=True)
+                
+                # 사내 이력 비교
                 diff_bpm = price_quote - bpm_avg
                 rate_bpm = (diff_bpm / bpm_avg) * 100
                 
@@ -181,28 +199,50 @@ try:
                 else:
                     st.error(f"🔴 **[사내 이력]** 과거 최고가({bpm_max:,.0f}원) 초과 **(고가 주의)**")
 
-                if price_gov > 0:
-                    diff_gov = price_quote - price_gov
-                    rate_gov = (diff_gov / price_gov) * 100
-                    if price_quote <= price_gov:
-                        st.success(f"🟢 **[물가자료]** 공인가({price_gov:,.0f}원) 대비 **{abs(rate_gov):.1f}% 저렴 (적정)**")
+                # 물가정보 비교
+                if price_info > 0:
+                    diff_info = price_quote - price_info
+                    rate_info = (diff_info / price_info) * 100
+                    if price_quote <= price_info:
+                        st.success(f"🟢 **[물가정보]** 공인가({price_info:,.0f}원) 대비 **{abs(rate_info):.1f}% 저렴 (적정)**")
                     else:
-                        st.error(f"🔴 **[물가자료]** 공인가({price_gov:,.0f}원) 대비 **{rate_gov:.1f}% 비쌈**")
+                        st.error(f"🔴 **[물가정보]** 공인가({price_info:,.0f}원) 대비 **{rate_info:.1f}% 비쌈**")
+
+                # 물가자료 비교
+                if price_data > 0:
+                    diff_data = price_quote - price_data
+                    rate_data = (diff_data / price_data) * 100
+                    if price_quote <= price_data:
+                        st.success(f"🟢 **[물가자료]** 공인가({price_data:,.0f}원) 대비 **{abs(rate_data):.1f}% 저렴 (적정)**")
+                    else:
+                        st.error(f"🔴 **[물가자료]** 공인가({price_data:,.0f}원) 대비 **{rate_data:.1f}% 비쌈**")
 
         st.divider()
 
         st.subheader("📊 단가 데이터 종합 비교")
         comp_data = {
-            "구분": ["사내 최저가", f"사내 평균가 ({bpm_count}건)", "사내 최고가", "물가자료 단가", "구매 견적가"],
-            "단가 (원)": [bpm_min, bpm_avg, bpm_max, price_gov, price_quote]
+            "구분": [
+                "사내 최저가", 
+                f"사내 평균가 ({bpm_count}건)", 
+                "사내 최고가", 
+                "물가정보 단가", 
+                "물가자료 단가", 
+                "🟦 구매견적가 (검토 대상)"
+            ],
+            "단가 (원)": [bpm_min, bpm_avg, bpm_max, price_info, price_data, price_quote]
         }
 
         comp_df = pd.DataFrame(comp_data)
         tbl_col, chart_col = st.columns([1, 1])
         with tbl_col:
-            st.table(comp_df.assign(단가=comp_df["단가 (원)"].apply(lambda x: f"{x:,.0f}원"))[["구분", "단가"]])
+            # 3. 구매견적가 행을 파란색 강조 표시한 스타일 적용
+            disp_df = comp_df.copy()
+            disp_df["단가"] = disp_df["단가 (원)"].apply(lambda x: f"{x:,.0f}원" if x > 0 else "미입력")
+            st.table(disp_df[["구분", "단가"]])
+            
         with chart_col:
-            st.bar_chart(comp_df[comp_df["단가 (원)"] > 0].set_index("구분"))
+            chart_df = comp_df[comp_df["단가 (원)"] > 0].set_index("구분")
+            st.bar_chart(chart_df)
 
     # ====================================================
     # 📄 PAGE 2: 업체 견적서 일괄 검토
