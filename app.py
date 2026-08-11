@@ -90,6 +90,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ----------------------------------------------------
+# 🔔 물가정보/물가자료 미입력 팝업 (Modal Dialog)
+# ----------------------------------------------------
+@st.dialog("⚠️ 물가자료 및 물가정보 검토 알림")
+def show_missing_price_dialog():
+    st.warning("💡 **물가정보 및 물가자료 단가가 입력되지 않았습니다.**")
+    st.write("공인 단가지(물가정보, 물가자료 등)를 검토하셨는지 다시 한번 확인해 주세요.")
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("확인 및 검토 진행", use_container_width=True):
+        st.session_state['dialog_shown'] = True
+        st.rerun()
+
+
 @st.cache_data
 def load_bpm_data():
     df = pd.read_excel('2025년 자재원본.xlsx', sheet_name='Data', header=2)
@@ -255,7 +268,7 @@ try:
             price_info = st.number_input("📑 물가정보 공인 단가 (원)", min_value=0, value=0, step=1000)
             price_data = st.number_input("📑 물가자료 공인 단가 (원)", min_value=0, value=auto_price_price, step=1000)
             
-            # 물가자료/정보 미입력 팝업 안내
+            # 물가자료/정보 미입력 상태 카드 안내
             if price_info == 0 and price_data == 0:
                 st.info("💡 **물가정보 및 물가자료는 검토하셨습니까?** (미입력 상태)")
 
@@ -267,6 +280,19 @@ try:
             """, unsafe_allow_html=True)
             price_quote = st.number_input("구매견적가 입력 (원)", min_value=0, value=bpm_avg, step=1000, label_visibility="collapsed")
             st.markdown('</div>', unsafe_allow_html=True)
+
+            # ----------------------------------------------------
+            # 팝업(Dialog) 트리거 조건 확인
+            # 견적가가 입력되어 있고 + 물가정보/자료 둘 다 0원일 때 팝업 출력
+            # ----------------------------------------------------
+            current_key = f"{selected_item}_{price_quote}_{price_info}_{price_data}"
+            if 'last_key' not in st.session_state or st.session_state['last_key'] != current_key:
+                st.session_state['last_key'] = current_key
+                st.session_state['dialog_shown'] = False
+
+            if price_quote > 0 and price_info == 0 and price_data == 0:
+                if not st.session_state.get('dialog_shown', False):
+                    show_missing_price_dialog()
 
         with col_result:
             st.markdown('<div class="custom-card">', unsafe_allow_html=True)
