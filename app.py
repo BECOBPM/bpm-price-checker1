@@ -9,13 +9,17 @@ try:
 except ImportError:
     HAS_PDF = False
 
-st.set_page_config(page_title="BPM 자재 단가 검증 시스템 (2025년 데이터 기준)", layout="wide", page_icon="⚙️")
+st.set_page_config(page_title="BPM 자재 단가 검증 시스템 (2025~2026년 데이터 기준)", layout="wide", page_icon="⚙️")
 
 @st.cache_data
 def load_bpm_data():
-    df = pd.read_excel('BPM 자재 금액대 형성_자재_규격검색기능.xlsx', sheet_name='Data')
+    # 2025~2026년 최신 자재 수불 원본 데이터 로드 (header=2 지정)
+    df = pd.read_excel('2025년 자재원본.xlsx', sheet_name='Data', header=2)
     
-    # 그룹별 절사평균(최상위 1개, 최하위 1개 제외) 계산
+    # 입고단가가 존재하는 유효 데이터만 필터링
+    df = df[df['입고단가'].notnull() & (df['입고단가'] > 0)]
+    
+    # 그룹별 절사평균(5건 이상 시 최상위 1개, 최하위 1개 제외) 계산
     def calc_trimmed_stats(g):
         prices = g['입고단가'].dropna().tolist()
         prices.sort()
@@ -85,7 +89,7 @@ try:
         "원하는 기능을 선택하세요", 
         ["🔍 단 품목 단가 검증", "📄 업체 견적서 일괄 검토", "📊 자재 데이터 분석"]
     )
-    st.sidebar.caption("💡 DB 기준: 2025년도 자재 구매 이력")
+    st.sidebar.caption("💡 DB 기준: 2025~2026년 자재 수불 이력")
     st.sidebar.markdown("---")
 
     # ====================================================
@@ -104,7 +108,7 @@ try:
                 accept_multiple_files=True
             )
 
-        st.title("⚙️ BPM 자재 단가 검증 시스템 (2025년 데이터 기준)")
+        st.title("⚙️ BPM 자재 단가 검증 시스템 (2025~2026년 데이터 기준)")
         
         c_search1, c_search2 = st.columns([1.5, 1.5])
         with c_search1:
@@ -204,7 +208,7 @@ try:
     # 📄 PAGE 2: 업체 견적서 일괄 검토
     # ====================================================
     elif page == "📄 업체 견적서 일괄 검토":
-        st.title("📄 업체 제출 견적서 일괄 검토 (2025년 데이터 기준)")
+        st.title("📄 업체 제출 견적서 일괄 검토 (2025~2026년 데이터 기준)")
         st.caption("업체에서 제출한 엑셀 견적서를 업로드하면, 사내 단가 DB와 자동으로 비교하여 적정성을 일괄 심사합니다.")
         st.divider()
 
@@ -309,8 +313,8 @@ try:
     # 📈 PAGE 3: 자재 데이터 분석
     # ====================================================
     else:
-        st.title("📊 사내 자재 데이터 종합 분석 (2025년 데이터 기준)")
-        st.caption("누적된 2025년도 자재 구매 이력을 바탕으로 자주 구매하는 자재와 단가 형성 추이를 분석합니다.")
+        st.title("📊 사내 자재 데이터 종합 분석 (2025~2026년 데이터 기준)")
+        st.caption("누적된 2025~2026년도 자재 구매 이력을 바탕으로 자주 구매하는 자재와 단가 형성 추이를 분석합니다.")
         st.divider()
 
         a_col1, a_col2 = st.columns(2)
