@@ -29,8 +29,8 @@ st.markdown("""
     
     /* 공단 상단 헤더 스타일 */
     .beco-header {
-        background: linear-gradient(135deg, #0f4c81 0%, #1e88e5 50%, #2e7d32 100%);
-        padding: 24px;
+        background: linear-gradient(135deg, #0f4c81 0%, #1e88e5 60%, #2e7d32 100%);
+        padding: 24px 28px;
         border-radius: 12px;
         color: white;
         margin-bottom: 25px;
@@ -74,7 +74,7 @@ st.markdown("""
         margin-bottom: 5px;
     }
     
-    /* 버튼 스티일 */
+    /* 버튼 스타일 */
     .stButton>button {
         background-color: #0f4c81;
         color: white;
@@ -156,12 +156,12 @@ try:
     stats_df = load_bpm_data()
 
     # ----------------------------------------------------
-    # 🌿 상단 공단 로고 / 타이틀 패널
+    # 🌿 상단 헤더 패널
     # ----------------------------------------------------
     st.markdown("""
     <div class="beco-header">
         <h1>🌿 부산환경공단 (BECO) 자재 단가 검증 시스템</h1>
-        <p>2025~2026년 자재 수불 이력 기반 공정·투명 계약지원 시스템 | 기술개발 및 단가심사 자동화</p>
+        <p>자재 수불 이력 기반 공정·투명 계약지원 시스템 | 기술개발 및 단가심사 자동화</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -173,7 +173,7 @@ try:
         "기능을 선택하세요", 
         ["🔍 단 품목 단가 검증", "📄 업체 견적서 일괄 검토", "📊 자재 데이터 분석"]
     )
-    st.sidebar.caption("DB 기준: 2025~2026년 실시간 입고이력")
+    st.sidebar.caption("DB 기준: 자재 실시간 입고이력")
     st.sidebar.markdown("---")
 
     # ====================================================
@@ -445,7 +445,7 @@ try:
     # ====================================================
     else:
         st.subheader("📊 사내 자재 현황 및 데이터 분석")
-        st.caption("2025~2026년 자재 수불 이력을 기반으로 최다 구매 품목과 단가 계약 대상 후보를 분석합니다.")
+        st.caption("자재 수불 이력을 기반으로 최다 구매 품목과 단가 계약 대상 후보를 분석합니다.")
         st.markdown("<br>", unsafe_allow_html=True)
 
         a_col1, a_col2 = st.columns(2)
