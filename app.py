@@ -101,11 +101,10 @@ def load_bpm_data():
 
 
 # ----------------------------------------------------
-# 📚 폴더 내 물가지 PDF 전체 자동 색인 및 캐싱
+# 📚 폴더 내 물가지 PDF 전체 자동 색인 (인쇄 페이지 번호 파싱 포함)
 # ----------------------------------------------------
 @st.cache_data
 def load_and_index_reference_pdfs():
-    """같은 폴더에 있는 모든 종합물가정보 PDF 텍스트를 미리 읽어서 캐시합니다."""
     pdf_files = glob.glob("종합물가정보*.pdf") + glob.glob("*.pdf")
     pdf_files = sorted(list(set(pdf_files)))
     
@@ -114,7 +113,6 @@ def load_and_index_reference_pdfs():
         return indexed_data
     
     for f_path in pdf_files:
-        # 사내 DB 파일은 제외
         if '2025년 자재원본' in f_path:
             continue
         try:
@@ -123,13 +121,26 @@ def load_and_index_reference_pdfs():
                 for page_num, page in enumerate(pdf.pages, 1):
                     text = page.extract_text()
                     if text:
-                        for line in text.split('\n'):
+                        lines = text.split('\n')
+                        
+                        # 상단 3줄 내에서 실제 인쇄 페이지 번호(예: 1069) 추출
+                        printed_page = f"{page_num}p"
+                        for head_line in lines[:3]:
+                            page_match = re.search(r'\b([1-9]\d{2,3})\b', head_line)
+                            if page_match:
+                                printed_page = f"페이지 {page_match.group(1)}"
+                                break
+
+                        for line in lines:
                             clean_line = line.strip()
                             if clean_line:
+                                # 자간 띄어쓰기 무시용 정규화 텍스트
+                                norm_line = re.sub(r'\s+', '', clean_line).upper()
                                 indexed_data.append({
                                     'file': file_name,
-                                    'page': page_num,
-                                    'text': clean_line
+                                    'page_str': printed_page,
+                                    'text': clean_line,
+                                    'norm_text': norm_line
                                 })
         except Exception:
             continue
@@ -138,47 +149,83 @@ def load_and_index_reference_pdfs():
 
 
 # ----------------------------------------------------
-# 🔍 스마트 키워드 토큰 기반 검색 함수
+# 🔍 정교한 검색 알고리즘 (띄어쓰기 무시 + 규격/숫자 정밀 매칭)
 # ----------------------------------------------------
 def search_in_indexed_pdfs(target_material, target_spec):
     indexed_lines = load_and_index_reference_pdfs()
     if not indexed_lines:
         return []
 
-    # 검색어 토큰화 (예: '게이트밸브', '주철, 80A10k' -> ['게이트', '밸브', '주철', '80A', '10K'])
-    raw_str = f"{target_material} {target_spec}"
-    tokens = [t.upper() for t in re.findall(r'[가-힣a-zA-Z0-9]+', raw_str) if len(t) >= 2 or t.isdigit()]
+    combined_str = f"{target_material} {target_spec}"
+    
+    # 숫자(6000), 영문(ZZ), 한글(볼베어링) 분리
+    num_tokens = re.findall(r'\d+', combined_str)          # 예: ['6000']
+    alpha_tokens = re.findall(r'[a-zA-Z]+', combined_str)  # 예: ['ZZ']
+    ko_tokens = re.findall(r'[가-힣]+', combined_str)      # 예: ['볼베어링']
+
+    ko_norm_tokens = [re.sub(r'\s+', '', k) for k in ko_tokens]
     
     candidates = []
+    
     for item in indexed_lines:
-        line_upper = item['text'].upper()
+        norm_line = item['norm_text']
+        orig_text = item['text']
         
-        # 토큰 포함 개수 측정
-        match_count = sum(1 for token in tokens if token in line_upper)
+        score = 0
         
-        # 2개 이상 토큰이 일치하거나, 토큰이 적은 경우 최소 1개 일치 시
-        if match_count >= 2 or (len(tokens) < 2 and match_count >= 1):
-            # 단가 숫출 (100원 초과)
-            numbers = re.findall(r'\b\d{1,3}(?:,\d{3})+\b|\b\d{4,9}\b', item['text'])
-            clean_nums = []
-            for n in numbers:
-                val = int(n.replace(',', ''))
-                if val >= 500: # 의미 있는 최소 단가 기준
-                    clean_nums.append(val)
+        # A. 규격 숫자 일치 여부 (가장 높음: 예 6000)
+        num_matched = False
+        if num_tokens:
+            for num in num_tokens:
+                if len(num) >= 3 and num in norm_line:
+                    score += 5
+                    num_matched = True
+        else:
+            num_matched = True
             
-            if clean_nums:
-                # 파일명 단순화 (예: 종합물가정보 2026년 08월호-기계.pdf -> 기계)
-                short_fname = re.sub(r'종합물가정보.*?-', '', item['file']).replace('.pdf', '')
-                if short_fname == item['file']:
-                    short_fname = item['file'][:15]
+        if not num_matched:
+            continue
+            
+        # B. 한글 품명 일치 여부 (띄어쓰기 무시 검색)
+        for k in ko_norm_tokens:
+            if k in norm_line:
+                score += 3
+            elif len(k) >= 3 and k[1:] in norm_line: # '볼베어링' -> '베어링'
+                score += 2
                     
-                candidates.append({
-                    'title': f"📄 [{short_fname} {item['page']}p] {item['text']}",
-                    'price': clean_nums[0],
-                    'score': match_count
-                })
+        # C. 영문 접미사 일치 여부 (ZZ, DD, OPEN)
+        for a in alpha_tokens:
+            if a.upper() in norm_line:
+                score += 2
 
-    # 적합도 높은 순 정렬
+        # D. 단가 추출 (500원 이상)
+        numbers = re.findall(r'\b\d{1,3}(?:,\d{3})+\b|\b\d{4,9}\b', orig_text)
+        clean_nums = []
+        for n in numbers:
+            val = int(n.replace(',', ''))
+            if val >= 500:
+                clean_nums.append(val)
+                
+        if clean_nums and score >= 5:
+            # 파일명 정돈 (예: 종합물가정보 2026년 08월호-기계.pdf -> 기계)
+            short_fname = item['file'].replace('종합물가정보', '').replace('.pdf', '').strip(' 2026년 08월호-_')
+            if not short_fname:
+                short_fname = item['file']
+
+            # OPEN, ZZ, DD 순서 대응 가격 선택 (볼베어링 ZZ 특화)
+            selected_price = clean_nums[0]
+            if 'ZZ' in [a.upper() for a in alpha_tokens] and len(clean_nums) >= 2:
+                selected_price = clean_nums[1] # OPEN, ZZ, DD 중 2번째(ZZ) 가격 선택
+            elif 'DD' in [a.upper() for a in alpha_tokens] and len(clean_nums) >= 3:
+                selected_price = clean_nums[2] # 3번째(DD) 선택
+
+            candidates.append({
+                'title': f"📄 [{short_fname} | {item['page_str']}] {orig_text}",
+                'price': selected_price,
+                'score': score
+            })
+
+    # 점수 높은 순 정렬
     candidates.sort(key=lambda x: (x['score'], x['price']), reverse=True)
     
     # 중복 제거
@@ -196,7 +243,7 @@ def search_in_indexed_pdfs(target_material, target_spec):
 try:
     stats_df = load_bpm_data()
 
-    # 상단 헤더
+    # 헤더
     st.markdown("""
     <div class="beco-header">
         <h1>🌿 부산환경공단 (BECO) 자재 단가 검증 시스템</h1>
@@ -210,7 +257,6 @@ try:
     st.sidebar.caption("DB 기준: 자재 실시간 입고이력")
     st.sidebar.markdown("---")
     
-    # 감지된 물가지 파일 현황 표시
     indexed_pdfs = list(set([item['file'] for item in load_and_index_reference_pdfs()]))
     st.sidebar.markdown("### 📚 참조 물가지 DB 현황")
     if indexed_pdfs:
@@ -221,9 +267,7 @@ try:
     else:
         st.sidebar.warning("폴더 내 물가지 PDF 파일이 없습니다.")
 
-    # ====================================================
-    # 🌟 PAGE 1: 단 품목 단가 검증
-    # ====================================================
+    # PAGE 1: 단 품목 단가 검증
     if page == "🔍 단 품목 단가 검증":
         st.sidebar.markdown("---")
         st.sidebar.markdown("### ⭐ 다빈도 구매 자재 (TOP 30)")
@@ -234,7 +278,7 @@ try:
         st.markdown('<div class="custom-card">', unsafe_allow_html=True)
         c_search1, c_search2 = st.columns([1.5, 1.5])
         with c_search1:
-            search_kw = st.text_input("🔍 자재명 또는 규격 검색", "", placeholder="예: 게이트밸브, 볼밸브, 80A").strip()
+            search_kw = st.text_input("🔍 자재명 또는 규격 검색", "", placeholder="예: 게이트밸브, 베어링, 6000zz").strip()
         
         with c_search2:
             if search_kw:
@@ -268,13 +312,15 @@ try:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 🔍 로컬 PDF 내 유사 항목 자동 탐색
+        # 🔍 로컬 PDF 내 유사 항목 자동 탐색 및 명확한 추천 상태 표시
         smart_hits = search_in_indexed_pdfs(selected_material, selected_spec)
         auto_selected_price = 0
 
+        st.markdown('<div class="custom-card" style="border-left: 5px solid #1e88e5;">', unsafe_allow_html=True)
+        st.markdown("#### 💡 참조 물가지 자동 탐색 및 추천 단가")
+        
         if smart_hits:
-            st.markdown('<div class="custom-card" style="border-left: 5px solid #2e7d32;">', unsafe_allow_html=True)
-            st.markdown("#### 💡 참조 물가지 내 유사 규격/단가 검색 결과 (자동 추천)")
+            st.success(f"🟢 **총 {len(smart_hits)}건의 관련 물가지 추천 단가를 찾았습니다!**")
             hit_options = [f"{item['title']} ➔ [{item['price']:,}원]" for item in smart_hits]
             hit_options.insert(0, "선택 안 함 (직접 입력)")
             
@@ -282,8 +328,11 @@ try:
             if selected_hit != "선택 안 함 (직접 입력)":
                 hit_idx = hit_options.index(selected_hit) - 1
                 auto_selected_price = smart_hits[hit_idx]['price']
-                st.success(f"선택한 물가정보 단가 **{auto_selected_price:,.0f}원**이 물가정보 단가란에 자동 반영되었습니다.")
-            st.markdown('</div>', unsafe_allow_html=True)
+                st.info(f"선택한 추천 단가 **{auto_selected_price:,.0f}원**이 물가정보 단가란에 자동 설정되었습니다.")
+        else:
+            st.warning("⚪ **참조 물가지에서 일치하는 추천 단가를 찾지 못했습니다.** (아래에서 직접 입력해 주세요)")
+            
+        st.markdown('</div>', unsafe_allow_html=True)
 
         # 비교 단가 입력 레이아웃
         col_input, col_result = st.columns([1, 1.2])
@@ -324,7 +373,6 @@ try:
                 st.markdown(f"##### 🟦 **검토 구매견적가: <span style='color:#1565C0; font-size:22px;'>{price_quote:,.0f}원</span>**", unsafe_allow_html=True)
                 st.markdown("---")
                 
-                # 사내 이력 비교
                 diff_bpm = price_quote - bpm_avg
                 rate_bpm = (diff_bpm / bpm_avg) * 100
                 if price_quote <= bpm_avg:
@@ -334,7 +382,6 @@ try:
                 else:
                     st.error(f"🔴 **[사내 이력 대비]** 과거 최고가({bpm_max:,.0f}원) 초과 **(고가 주의)**")
 
-                # 물가정보 비교
                 if price_info > 0:
                     diff_info = price_quote - price_info
                     rate_info = (diff_info / price_info) * 100
@@ -343,7 +390,6 @@ try:
                     else:
                         st.error(f"🔴 **[물가정보]** 공인가({price_info:,.0f}원) 대비 **{rate_info:.1f}% 비쌈**")
 
-                # 물가자료 비교
                 if price_data > 0:
                     diff_data = price_quote - price_data
                     rate_data = (diff_data / price_data) * 100
@@ -373,7 +419,6 @@ try:
             chart_df = comp_df[comp_df["단가 (원)"] > 0].set_index("구분")
             st.bar_chart(chart_df)
 
-    # PAGE 2 & 3
     elif page == "📄 업체 견적서 일괄 검토":
         st.subheader("📄 업체 제출 견적서 자동 일괄 검토")
         st.caption("업체에서 제출한 엑셀 견적서를 업로드하면, 공단 사내 단가 DB와 비교하여 적정성을 검토합니다.")
