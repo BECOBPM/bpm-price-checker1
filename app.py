@@ -1,11 +1,19 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import re
+import io
+import requests
+import urllib.parse
 
+# ==========================================
 # 1. 페이지 기본 설정
+# ==========================================
 st.set_page_config(page_title="BECO BPM - 부산환경공단", layout="wide")
 
+# ==========================================
 # 2. Custom CSS
+# ==========================================
 st.markdown("""
     <style>
         .block-container {
@@ -39,68 +47,72 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- [DB 확장: 배관/파이프/이음쇠/밸브류 풍부하게 반영] ---
-@st.cache_data
-def load_sample_data():
-    data = [
-        # --- [기계/배관 관련 자재 대폭 확충] ---
-        {"분류": "기계", "자재명": "스텐 배관 파이프", "자재규격": "STS304 50A Sch10 6m", "입고단가": 125000, "납품업체": "(주)부산배관자재", "입고일자": "2026-02-15", "수량": 20},
-        {"분류": "기계", "자재명": "스텐 배관 엘보", "자재규격": "STS304 90E(S) 50A", "입고단가": 8500, "납품업체": "(주)부산배관자재", "입고일자": "2026-02-15", "수량": 50},
-        {"분류": "기계", "자재명": "스텐 배관 티", "자재규격": "STS304 Equal Tee 50A", "입고단가": 12000, "납품업체": "한성배관", "입고일자": "2026-01-10", "수량": 30},
-        {"분류": "기계", "자재명": "배관용 플랜지", "자재규격": "STS304 10K 50A FF", "입고단가": 15500, "납품업체": "한성배관", "입고일자": "2026-03-02", "수량": 40},
-        {"분류": "기계", "자재명": "배관용 가스켓", "자재규격": "비아스베스트 10K 50A 3t", "입고단가": 1800, "납품업체": "동래패킹", "입고일자": "2026-03-02", "수량": 100},
-        {"분류": "기계", "자재명": "스텐볼밸브(배관용)", "자재규격": "15A 나사식", "입고단가": 3700, "납품업체": "(주)동래유통", "입고일자": "2025-08-12", "수량": 100},
-        {"분류": "기계", "자재명": "스텐볼밸브(배관용)", "자재규격": "15A 나사식", "입고단가": 3850, "납품업체": "(주)부산배관자재", "입고일자": "2026-02-10", "수량": 120},
-        {"분류": "기계", "자재명": "버터플라이밸브", "자재규격": "100A 레버식 배관용", "입고단가": 48000, "납품업체": "한성배관", "입고일자": "2026-03-15", "수량": 10},
+# ==========================================
+# 3. 데이터 로드 함수 (GitHub Raw URL 연동)
+# ==========================================
+GITHUB_USER = "BECOBPM"
+REPO_NAME = "bpm-price-checker1"
+BRANCH = "main"
 
-        # --- [기계 - 베어링류] ---
-        {"분류": "기계", "자재명": "볼베어링", "자재규격": "6302zz", "입고단가": 2700, "납품업체": "한국베어링", "입고일자": "2026-01-15", "수량": 50},
-        {"분류": "기계", "자재명": "볼베어링", "자재규격": "6302zz", "입고단가": 2950, "납품업체": "삼공사", "입고일자": "2025-09-20", "수량": 30},
-        {"분류": "기계", "자재명": "볼베어링", "자재규격": "6304zz", "입고단가": 3190, "납품업체": "한국베어링", "입고일자": "2026-03-01", "수량": 40},
-        {"분류": "기계", "자재명": "볼베어링", "자재규격": "6201zz", "입고단가": 2100, "납품업체": "(주)부산베어링", "입고일자": "2025-10-11", "수량": 60},
-        {"분류": "기계", "자재명": "UC베어링", "자재규격": "UC205", "입고단가": 8500, "납품업체": "동화기계", "입고일자": "2026-01-20", "수량": 20},
+FILE_MASTER = "2025년 자재원본.xlsx"
+FILE_PRICE_INDEX = "종합물가정보 2026년 08월호-기계.xlsx"
 
-        # --- [전기 분야] ---
-        {"분류": "전기", "자재명": "배선용차단기", "자재규격": "3P 100A 30kA", "입고단가": 35000, "납품업체": "LS전기상사", "입고일자": "2026-01-08", "수량": 25},
-        {"분류": "전기", "자재명": "전자마그네트", "자재규격": "GMC-40 AC220V", "입고단가": 28000, "납품업체": "LS전기상사", "입고일자": "2025-11-20", "수량": 30},
-        {"분류": "전기", "자재명": "LED 투광등", "자재규격": "150W 방수형", "입고단가": 62000, "납품업체": "부경조명", "입고일자": "2026-02-18", "수량": 50},
+# 한글 및 공백 파일명 URL 인코딩 처리
+url_master_filename = urllib.parse.quote(FILE_MASTER)
+url_price_filename = urllib.parse.quote(FILE_PRICE_INDEX)
 
-        # --- [환경 분야] ---
-        {"분류": "환경", "자재명": "고분자응집제", "자재규격": "중앙이온(액상)", "입고단가": 125000, "납품업체": "경남화학", "입고일자": "2026-01-10", "수량": 150},
-        {"분류": "환경", "자재명": "차아염소산나트륨", "자재규격": "12% 20L", "입고단가": 18000, "납품업체": "부산케미칼", "입고일자": "2026-03-05", "수량": 80},
-    ]
-    df = pd.DataFrame(data)
-    df['총구매금액'] = df['입고단가'] * df['수량']
+GITHUB_MASTER_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{REPO_NAME}/{BRANCH}/{url_master_filename}"
+GITHUB_PRICE_INDEX_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{REPO_NAME}/{BRANCH}/{url_price_filename}"
+
+
+@st.cache_data(ttl=3600)  # 1시간 캐시 갱신
+def load_data_from_github(url):
+    """GitHub Raw URL에서 엑셀 파일 로드"""
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        df = pd.read_excel(io.BytesIO(response.content))
+        return df
+    except Exception as e:
+        st.error(f"❌ GitHub 데이터 로드 실패: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def load_default_history():
+    """GitHub 기반 사내 자재 입고 이력 DB 로드"""
+    df = load_data_from_github(GITHUB_MASTER_URL)
+    
+    if not df.empty and '입고단가' in df.columns and '수량' in df.columns:
+        df['입고단가'] = pd.to_numeric(df['입고단가'], errors='coerce').fillna(0)
+        df['수량'] = pd.to_numeric(df['수량'], errors='coerce').fillna(0)
+        df['총구매금액'] = df['입고단가'] * df['수량']
     return df
 
-@st.cache_data
-def load_price_index_data():
-    price_data = [
-        {"품목명": "스텐 배관 파이프", "규격": "STS304 50A", "추천단가": 120000, "출처": "거래가격 2026.04"},
-        {"품목명": "스텐 배관 엘보", "규격": "STS304 50A", "추천단가": 8200, "출처": "물가자료 2026.04"},
-        {"품목명": "볼베어링", "규격": "6302ZZ", "추천단가": 2700, "출처": "물가자료 2026.04"},
-        {"품목명": "볼베어링", "규격": "6304ZZ", "추천단가": 3100, "출처": "거래가격 2026.04"},
-        {"품목명": "스텐볼밸브(배관용)", "규격": "15A 나사식", "추천단가": 3800, "출처": "거래가격 2026.04"},
-        {"품목명": "고분자응집제", "규격": "중앙이온", "추천단가": 120000, "출처": "물가자료 2026.04"},
-    ]
-    return pd.DataFrame(price_data)
 
-df_history = load_sample_data()
-df_mulga = load_price_index_data()
+@st.cache_data(ttl=3600)
+def load_default_price_index():
+    """GitHub 기반 물가지/추천단가 DB 로드"""
+    df = load_data_from_github(GITHUB_PRICE_INDEX_URL)
+    
+    if not df.empty and '추천단가' in df.columns:
+        df['추천단가'] = pd.to_numeric(df['추천단가'], errors='coerce').fillna(0)
+    return df
 
 
-# --- [검색 로직 강화: 자재명 + 규격 + 납품업체 + 분류 통합 검색] ---
+# ==========================================
+# 4. 검색 및 일괄 검토 엔진
+# ==========================================
 def search_materials(df, query):
+    """자재명 또는 규격 통합 검색"""
     if not query or not query.strip():
         return df
     tokens = query.strip().lower().split()
     
-    # 자재명, 자재규격, 납품업체, 분류 전체를 하나의 대상으로 묶어 검색
     combined_target = (
         df['자재명'].astype(str) + " " + 
         df['자재규격'].astype(str) + " " + 
-        df['납품업체'].astype(str) + " " + 
-        df['분류'].astype(str)
+        df.get('분류', pd.Series(['']*len(df))).astype(str)
     ).str.lower()
     
     mask = pd.Series(True, index=df.index)
@@ -108,36 +120,71 @@ def search_materials(df, query):
         mask &= combined_target.str.contains(re.escape(token), regex=True, na=False)
     return df[mask]
 
-def find_reference_price(df_mulga, item_name, item_spec):
-    if df_mulga is None or df_mulga.empty:
-        return None
-    spec_clean = re.sub(r'[^a-zA-Z0-9]', '', str(item_spec)).lower()
-    spec_nums = re.findall(r'\d+', str(item_spec))
+def batch_process_quote(quote_df, ref_df, col_name, col_spec, col_qty, col_price):
+    """8,000+ 대용량 견적 데이터 고속 대조/분석 엔진"""
+    df_work = quote_df.copy()
     
-    matched_rows = []
-    for _, row in df_mulga.iterrows():
-        m_name = str(row['품목명']).lower()
-        m_spec = str(row['규격']).lower()
-        m_spec_clean = re.sub(r'[^a-zA-Z0-9]', '', m_spec)
+    df_work[col_qty] = pd.to_numeric(df_work[col_qty], errors='coerce').fillna(0)
+    df_work[col_price] = pd.to_numeric(df_work[col_price], errors='coerce').fillna(0)
+    
+    df_work['_match_key'] = df_work[col_name].astype(str).str.strip().str.lower() + "_" + df_work[col_spec].astype(str).str.strip().str.lower()
+    
+    if ref_df is not None and not ref_df.empty:
+        ref_temp = ref_df.copy()
+        ref_name_col = '품목명' if '품목명' in ref_temp.columns else ref_temp.columns[0]
+        ref_spec_col = '규격' if '규격' in ref_temp.columns else ref_temp.columns[1]
+        ref_price_col = '추천단가' if '추천단가' in ref_temp.columns else ref_temp.columns[2]
         
-        name_match = (str(item_name).lower() in m_name) or (m_name in str(item_name).lower())
-        spec_match = (spec_clean in m_spec_clean) or (m_spec_clean in spec_clean)
+        ref_temp['_match_key'] = ref_temp[ref_name_col].astype(str).str.strip().str.lower() + "_" + ref_temp[ref_spec_col].astype(str).str.strip().str.lower()
+        ref_temp = ref_temp.drop_duplicates(subset=['_match_key'])
         
-        if not spec_match and spec_nums:
-            spec_match = any(num in m_spec for num in spec_nums)
+        merged = pd.merge(df_work, ref_temp[['_match_key', ref_price_col]], on='_match_key', how='left')
+        merged['추천단가'] = merged[ref_price_col]
+    else:
+        merged = df_work
+        merged['추천단가'] = np.nan
+        
+    merged['추천단가_최종'] = merged['추천단가'].fillna(merged[col_price])
+    merged['견적합계'] = merged[col_qty] * merged[col_price]
+    merged['추천합계'] = merged[col_qty] * merged['추천단가_최종']
+    
+    merged['단가차율(%)'] = np.where(
+        merged['추천단가_최종'] > 0,
+        ((merged[col_price] - merged['추천단가_최종']) / merged['추천단가_최종'] * 100).round(1),
+        0.0
+    )
+    
+    merged['예상절감액'] = np.where(
+        merged['견적합계'] > merged['추천합계'],
+        merged['견적합계'] - merged['추천합계'],
+        0
+    )
+    
+    def assign_status(row):
+        if pd.isna(row['추천단가']):
+            return "⚪ 기준미확인"
+        diff = row['단가차율(%)']
+        if diff <= 0:
+            return "🟢 적정"
+        elif diff <= 10:
+            return "🟡 검토필요 (+10% 이내)"
+        else:
+            return "🔴 단가초과 (+10% 초과)"
             
-        if name_match and spec_match:
-            matched_rows.append(row)
-            
-    return pd.DataFrame(matched_rows) if matched_rows else None
+    merged['판정'] = merged.apply(assign_status, axis=1)
+    
+    merged = merged.drop(columns=['_match_key', '추천단가'], errors='ignore')
+    merged = merged.rename(columns={'추천단가_최종': '추천단가'})
+    
+    return merged
 
 
 # ==========================================
-# 3. 사이드바 메뉴
+# 5. 사이드바 구성
 # ==========================================
 with st.sidebar:
     st.title("🥬 BECO BPM 메뉴")
-    st.caption("기능을 선택하세요")
+    st.caption("기능 및 데이터베이스 선택")
     
     selected_menu = st.radio(
         "메뉴 선택",
@@ -145,60 +192,71 @@ with st.sidebar:
             "🔍 단 품목 단가 검증", 
             "📈 자재 데이터 요약 (TOP 50)",
             "📊 자재 데이터 분석", 
-            "📄 업체 견적서 일괄 검토"
+            "📄 업체 견적서 일괄 검토 (대용량)"
         ],
         index=0,
         label_visibility="collapsed"
     )
     
-    st.caption("DB 기준: 자재 실시간 입고이력")
     st.markdown("---")
+    st.markdown("### 📁 커스텀 DB 업로드 (선택)")
+    st.caption("GitHub 데이터 대신 로컬 엑셀을 업로드하여 테스트할 수 있습니다.")
     
-    st.markdown("### ⭐ 다빈도 구매 자재 (TOP 30)")
-    st.caption("목록에서 빠른 선택")
+    custom_master_file = st.file_uploader("사내 자재 DB (.xlsx)", type=["xlsx", "xls"], key="master_db")
+    custom_ref_file = st.file_uploader("물가지/추천단가 DB (.xlsx)", type=["xlsx", "xls"], key="ref_db")
     
-    top30_options = [
-        "선택 안함",
-        "스텐 배관 파이프 | STS304 50A Sch10 6m",
-        "스텐 배관 엘보 | STS304 90E(S) 50A",
-        "볼베어링 | 6302zz",
-        "스텐볼밸브(배관용) | 15A 나사식",
-        "고분자응집제 | 중앙이온(액상)"
-    ]
-    quick_selected = st.selectbox("TOP 30 목록", top30_options, label_visibility="collapsed")
+    st.markdown("---")
+    st.markdown("### ⭐ 다빈도 구매 자재")
+    top30_options = ["선택 안함", "스텐 배관 파이프", "배관용 플랜지", "볼베어링"]
+    quick_selected = st.selectbox("빠른 선택", top30_options, label_visibility="collapsed")
+
+
+# 데이터 로드 (업로드 파일 우선, 없으면 GitHub 연동)
+if custom_master_file:
+    df_history = pd.read_excel(custom_master_file)
+    if '입고단가' in df_history.columns and '수량' in df_history.columns:
+        df_history['총구매금액'] = pd.to_numeric(df_history['입고단가'], errors='coerce').fillna(0) * pd.to_numeric(df_history['수량'], errors='coerce').fillna(0)
+else:
+    df_history = load_default_history()
+
+if custom_ref_file:
+    df_mulga = pd.read_excel(custom_ref_file)
+else:
+    df_mulga = load_default_price_index()
 
 
 # ==========================================
-# 4. 메인 화면
+# 6. 메인 화면 헤더
 # ==========================================
 st.markdown("""
     <div class="top-header-banner">
         <h1>🌿 부산환경공단 BPM (Beco Parts Master)</h1>
-        <p>자재 수불 이력 기반 공정·투명 계약지원 시스템 | 기술개발 및 단가심사 자동화</p>
+        <p>자재 수불 이력 기반 공정·투명 계약지원 시스템 | 8,000+ 대용량 자재 견적 일괄 심사</p>
     </div>
 """, unsafe_allow_html=True)
 
 
-# --- [메뉴 1] 단 품목 단가 검증 ---
+# ==========================================
+# [메뉴 1] 단 품목 단가 검증
+# ==========================================
 if selected_menu == "🔍 단 품목 단가 검증":
-    
-    default_search_val = ""
-    if quick_selected != "선택 안함":
-        default_search_val = quick_selected.replace(" | ", " ")
+    default_search_val = "" if quick_selected == "선택 안함" else quick_selected
     
     col_search, col_select = st.columns([1, 1])
-    
     with col_search:
-        search_input = st.text_input("🔍 자재명 또는 규격 검색", value=default_search_val, placeholder="예: 배관, 스텐 파이프, 베어링 6302")
+        search_input = st.text_input("🔍 자재명 또는 규격 검색", value=default_search_val, placeholder="예: 배관, 스텐 파이프, 베어링")
     
     filtered_df = search_materials(df_history, search_input)
-    unique_items = filtered_df[['자재명', '자재규격']].drop_duplicates() if not filtered_df.empty else pd.DataFrame()
+    
+    if not filtered_df.empty and '자재명' in filtered_df.columns and '자재규격' in filtered_df.columns:
+        unique_items = filtered_df[['자재명', '자재규격']].drop_duplicates()
+    else:
+        unique_items = pd.DataFrame()
     
     with col_select:
         if not unique_items.empty:
             options = [f"{row['자재명']} | {row['자재규격']}" for _, row in unique_items.iterrows()]
             selected_option = st.selectbox(f"검색 결과 ({len(options)}건)", options)
-            
             sel_name, sel_spec = selected_option.split(" | ")
             item_records = df_history[(df_history['자재명'] == sel_name) & (df_history['자재규격'] == sel_spec)]
         else:
@@ -211,123 +269,212 @@ if selected_menu == "🔍 단 품목 단가 검증":
         
         st.markdown(f"### 📦 선택 품목: **[{target_name}]** `({target_spec})`")
         
-        min_row = item_records.loc[item_records['입고단가'].idxmin()]
-        max_row = item_records.loc[item_records['입고단가'].idxmax()]
+        min_price = item_records['입고단가'].min()
+        max_price = item_records['입고단가'].max()
         avg_price = item_records['입고단가'].mean()
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("사내 구매 이력", f"{len(item_records)} 건")
         c2.metric("사내 평균 단가", f"{int(avg_price):,} 원")
-        c3.metric(
-            "과거 최저 단가", 
-            f"{min_row['입고단가']:,} 원", 
-            delta=f"최저업체: {min_row['납품업체']}",
-            delta_color="normal"
-        )
-        c4.metric(
-            "과거 최고 단가", 
-            f"{max_row['입고단가']:,} 원", 
-            delta=f"최고업체: {max_row['납품업체']}",
-            delta_color="inverse"
-        )
+        c3.metric("과거 최저 단가", f"{int(min_price):,} 원")
+        c4.metric("과거 최고 단가", f"{int(max_price):,} 원")
         
         st.markdown("---")
-        st.markdown("#### 💡 참조 물가지 자동 탐색 및 추천 단가")
-        ref_result = find_reference_price(df_mulga, target_name, target_spec)
-        
-        if ref_result is not None and not ref_result.empty:
-            for _, ref in ref_result.iterrows():
-                st.success(f"✅ **[물가지 매칭 성공]** 추천 단가: **{ref['추천단가']:,} 원** (출처: {ref['출처']} / 규격: {ref['규격']})")
-        else:
-            st.info("⭕ 참조 물가지에서 일치하는 자동 추천 단가가 없습니다.")
-            
         st.markdown("#### 📜 사내 과거 납품 상세 이력")
-        display_df = item_records[['입고일자', '납품업체', '수량', '입고단가']].sort_values(by='입고일자', ascending=False)
+        
+        display_cols = [col for col in ['입고일자', '수량', '입고단가', '총구매금액'] if col in item_records.columns]
+        display_df = item_records[display_cols].sort_values(by=display_cols[0], ascending=False) if display_cols else item_records
         st.dataframe(
-            display_df.style.format({'입고단가': '{:,} 원', '수량': '{:,} 개'}),
+            display_df.style.format({'입고단가': '{:,} 원', '수량': '{:,} 개', '총구매금액': '{:,} 원'}),
             use_container_width=True,
             hide_index=True
         )
 
 
-# --- [메뉴 2] 📈 자재 데이터 요약 (TOP 50) ---
+# ==========================================
+# [메뉴 2] 📈 자재 데이터 요약 (TOP 50)
+# ==========================================
 elif selected_menu == "📈 자재 데이터 요약 (TOP 50)":
     st.subheader("📈 부산환경공단 자재 데이터 요약 (TOP 50)")
-    st.write("사내 입고 이력을 바탕으로 **분류별(기계/전기/환경)** 최다 구매 자재 순위를 분석합니다.")
+    st.write("사내 입고 이력을 바탕으로 최다 구매 자재 순위를 집계 및 분석합니다.")
     
-    category_filter = st.radio(
-        "🏷️ 분야 선택", 
-        ["전체", "⚙️ 기계", "⚡ 전기", "🌿 환경"], 
-        horizontal=True
-    )
+    category_filter = st.radio("🏷️ 분야 선택", ["전체", "⚙️ 기계", "⚡ 전기", "🌿 환경"], horizontal=True)
     
     filtered_summary_df = df_history.copy()
-    if category_filter != "전체":
+    if category_filter != "전체" and '분류' in filtered_summary_df.columns:
         cat_name = category_filter.replace("⚙️ ", "").replace("⚡ ", "").replace("🌿 ", "")
         filtered_summary_df = filtered_summary_df[filtered_summary_df['분류'] == cat_name]
     
-    grouped_df = filtered_summary_df.groupby(['분류', '자재명', '자재규격']).agg(
-        총구매금액=('총구매금액', 'sum'),
-        총구매수량=('수량', 'sum'),
-        구매건수=('입고단가', 'count'),
-        평균입고단가=('입고단가', 'mean')
-    ).reset_index()
+    group_cols = [c for c in ['분류', '자재명', '자재규격'] if c in filtered_summary_df.columns]
     
-    top50_df = grouped_df.sort_values(by='총구매금액', ascending=False).head(50)
-    top50_df.insert(0, '순위', range(1, len(top50_df) + 1))
-    
-    col_stat1, col_stat2, col_stat3 = st.columns(3)
-    col_stat1.metric("분석 대상 자재 종류", f"{len(top50_df)} 개 품목")
-    col_stat2.metric("총 집계 구매금액", f"{int(top50_df['총구매금액'].sum()):,} 원")
-    col_stat3.metric("총 집계 구매건수", f"{int(top50_df['구매건수'].sum()):,} 건")
-    
-    st.markdown("---")
-    st.markdown("#### 📊 구매금액 상위 품목 TOP 10")
-    top10_chart_data = top50_df.head(10).set_index('자재명')[['총구매금액']]
-    st.bar_chart(top10_chart_data)
-    
-    st.markdown("#### 📋 TOP 50 자재 데이터 목록")
-    st.dataframe(
-        top50_df.style.format({
-            '총구매금액': '{:,} 원',
-            '총구매수량': '{:,} 개',
-            '구매건수': '{:,} 건',
-            '평균입고단가': '{:,.0f} 원'
-        }),
-        use_container_width=True,
-        hide_index=True
-    )
+    if group_cols and '총구매금액' in filtered_summary_df.columns:
+        grouped_df = filtered_summary_df.groupby(group_cols).agg(
+            총구매금액=('총구매금액', 'sum'),
+            총구매수량=('수량', 'sum'),
+            구매건수=('입고단가', 'count'),
+            평균입고단가=('입고단가', 'mean')
+        ).reset_index()
+        
+        top50_df = grouped_df.sort_values(by='총구매금액', ascending=False).head(50)
+        top50_df.insert(0, '순위', range(1, len(top50_df) + 1))
+        
+        col_stat1, col_stat2, col_stat3 = st.columns(3)
+        col_stat1.metric("분석 대상 자재 종류", f"{len(top50_df)} 개 품목")
+        col_stat2.metric("총 집계 구매금액", f"{int(top50_df['총구매금액'].sum()):,} 원")
+        col_stat3.metric("총 집계 구매건수", f"{int(top50_df['구매건수'].sum()):,} 건")
+        
+        st.markdown("---")
+        st.markdown("#### 📊 구매금액 상위 품목 TOP 10")
+        if not top50_df.empty and '자재명' in top50_df.columns:
+            top10_chart_data = top50_df.head(10).set_index('자재명')[['총구매금액']]
+            st.bar_chart(top10_chart_data)
+        
+        st.markdown("#### 📋 TOP 50 자재 데이터 목록")
+        st.dataframe(
+            top50_df.style.format({
+                '총구매금액': '{:,} 원',
+                '총구매수량': '{:,} 개',
+                '구매건수': '{:,} 건',
+                '평균입고단가': '{:,.0f} 원'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.warning("데이터에 필수 컬럼('총구매금액', '자재명' 등)이 포함되어 있지 않습니다.")
 
 
-# --- [메뉴 3] 자재 데이터 분석 ---
+# ==========================================
+# [메뉴 3] 📊 자재 데이터 분석
+# ==========================================
 elif selected_menu == "📊 자재 데이터 분석":
     st.subheader("📊 자재 데이터 분석")
-    st.write("전체 DB 및 선택 품목의 단가 변동 추이와 공급업체 비중을 다각도로 분석합니다.")
+    st.write("선택 품목의 단가 변동 추이 및 수량 분포를 분석합니다.")
     
-    all_item_list = (df_history['자재명'] + " | " + df_history['자재규격']).unique()
-    selected_item_for_chart = st.selectbox("🎯 분석할 품목 선택", all_item_list)
-    
-    if selected_item_for_chart:
-        item_name, item_spec = selected_item_for_chart.split(" | ")
-        chart_df = df_history[(df_history['자재명'] == item_name) & (df_history['자재규격'] == item_spec)]
+    if not df_history.empty and '자재명' in df_history.columns and '자재규격' in df_history.columns:
+        all_item_list = (df_history['자재명'].astype(str) + " | " + df_history['자재규격'].astype(str)).unique()
+        selected_item_for_chart = st.selectbox("🎯 분석할 품목 선택", all_item_list)
         
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("##### 📈 시간 흐름에 따른 단가 변동 추이")
-            time_chart = chart_df.sort_values('입고일자').set_index('입고일자')[['입고단가']]
-            st.line_chart(time_chart)
-        with c2:
-            st.markdown("##### 🏢 납품업체별 계약 건수")
-            vendor_counts = chart_df['납품업체'].value_counts()
-            st.bar_chart(vendor_counts)
+        if selected_item_for_chart:
+            item_name, item_spec = selected_item_for_chart.split(" | ")
+            chart_df = df_history[(df_history['자재명'] == item_name) & (df_history['자재규격'] == item_spec)]
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("##### 📈 입고일자별 단가 변동 추이")
+                if '입고일자' in chart_df.columns and not chart_df.empty:
+                    time_chart = chart_df.sort_values('입고일자').set_index('입고일자')[['입고단가']]
+                    st.line_chart(time_chart)
+            with c2:
+                st.markdown("##### 📦 입고 건별 수량 분포")
+                if '수량' in chart_df.columns and not chart_df.empty:
+                    st.bar_chart(chart_df['수량'])
+    else:
+        st.warning("분석할 사내 자재 데이터가 없습니다.")
 
 
-# --- [메뉴 4] 업체 견적서 일괄 검토 ---
-elif selected_menu == "📄 업체 견적서 일괄 검토":
-    st.subheader("📄 업체 견적서 일괄 검토")
-    st.write("업체에서 제출한 엑셀 견적서를 업로드하여 사내 이력 및 물가지와 일괄 대조합니다.")
+# ==========================================
+# [메뉴 4] 📄 업체 견적서 일괄 검토 (대용량)
+# ==========================================
+elif selected_menu == "📄 업체 견적서 일괄 검토 (대용량)":
+    st.subheader("📄 업체 견적서 일괄 검토 (8,000+ 품목 대용량 지원)")
+    st.write("업체에서 제출한 엑셀 견적서를 업로드하면 **전체 품목을 GitHub 기준 물가지 DB와 자동 매칭하여 추천단가 및 적정성을 일괄 산정**합니다.")
     
-    uploaded_file = st.file_uploader("📁 업체 견적서 엑셀 파일(.xlsx)을 업로드하세요", type=["xlsx", "xls"])
-    if uploaded_file:
-        st.success(f"파일명: {uploaded_file.name} 이 성공적으로 업로드되었습니다.")
-        st.info("💡 검증 로직이 실행되어 사내 DB 및 물가지와 일괄 비교 표가 생성됩니다.")
+    uploaded_quote = st.file_uploader("📁 업체 제출 견적서 엑셀 파일 (.xlsx, .xls)", type=["xlsx", "xls"], key="quote_uploader")
+    
+    if uploaded_quote:
+        try:
+            quote_raw_df = pd.read_excel(uploaded_quote)
+            st.success(f"✅ 견적서 파일 업로드 완료: **{uploaded_quote.name}** (총 {len(quote_raw_df):,}개 품목 감지됨)")
+            
+            st.markdown("---")
+            st.markdown("#### ⚙️ 엑셀 컬럼 매핑 설정")
+            
+            cols = list(quote_raw_df.columns)
+            
+            def find_col(keywords, default_idx=0):
+                for idx, c in enumerate(cols):
+                    if any(k in str(c).lower() for k in keywords):
+                        return idx
+                return min(default_idx, len(cols) - 1)
+            
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            with mc1:
+                c_name = st.selectbox("품목명(자재명) 컬럼", cols, index=find_col(['품목', '자재', '품명', 'item', 'name'], 0))
+            with mc2:
+                c_spec = st.selectbox("규격 컬럼", cols, index=find_col(['규격', 'spec', 'size'], 1 if len(cols)>1 else 0))
+            with mc3:
+                c_qty = st.selectbox("수량 컬럼", cols, index=find_col(['수량', 'qty', 'count'], 2 if len(cols)>2 else 0))
+            with mc4:
+                c_price = st.selectbox("견적단가 컬럼", cols, index=find_col(['단가', '견적', 'price', 'cost'], 3 if len(cols)>3 else 0))
+            
+            if st.button("🚀 전체 품목 추천단가 일괄 검토 실행"):
+                with st.spinner(f"8,000+ 대용량 데이터 고속 검토 중... ({len(quote_raw_df):,}건)"):
+                    processed_df = batch_process_quote(quote_raw_df, df_mulga, c_name, c_spec, c_qty, c_price)
+                
+                total_items = len(processed_df)
+                total_quote_amt = processed_df['견적합계'].sum()
+                total_rec_amt = processed_df['추천합계'].sum()
+                total_savings = processed_df['예상절감액'].sum()
+                
+                over_price_cnt = len(processed_df[processed_df['판정'].str.contains('🔴', na=False)])
+                check_req_cnt = len(processed_df[processed_df['판정'].str.contains('🟡', na=False)])
+                
+                st.markdown("---")
+                st.markdown("### 📊 일괄 검토 결과 요약")
+                
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("검토 품목 수", f"{total_items:,} 건")
+                s2.metric("총 견적 금액", f"{int(total_quote_amt):,} 원")
+                s3.metric("추천 기준 총액", f"{int(total_rec_amt):,} 원")
+                s4.metric("총 예상 절감액", f"{int(total_savings):,} 원", delta=f"초과 {over_price_cnt}건 / 주의 {check_req_cnt}건")
+                
+                st.markdown("---")
+                st.markdown("#### 📋 상세 검토 및 추천단가 내역")
+                
+                filter_status = st.radio(
+                    "판정 필터", 
+                    ["전체 보기", "🔴 단가초과만 보기", "🟡 검토필요만 보기", "🟢 적정만 보기", "⚪ 기준미확인만 보기"], 
+                    horizontal=True
+                )
+                
+                display_result_df = processed_df.copy()
+                if "🔴" in filter_status:
+                    display_result_df = display_result_df[display_result_df['판정'].str.contains('🔴', na=False)]
+                elif "🟡" in filter_status:
+                    display_result_df = display_result_df[display_result_df['판정'].str.contains('🟡', na=False)]
+                elif "🟢" in filter_status:
+                    display_result_df = display_result_df[display_result_df['판정'].str.contains('🟢', na=False)]
+                elif "⚪" in filter_status:
+                    display_result_df = display_result_df[display_result_df['판정'].str.contains('⚪', na=False)]
+                
+                show_cols = [c_name, c_spec, c_qty, c_price, '추천단가', '견적합계', '추천합계', '단가차율(%)', '판정', '예상절감액']
+                final_table = display_result_df[[c for c in show_cols if c in display_result_df.columns]]
+                
+                st.dataframe(
+                    final_table.style.format({
+                        c_qty: '{:,}',
+                        c_price: '{:,} 원',
+                        '추천단가': '{:,.0f} 원',
+                        '견적합계': '{:,} 원',
+                        '추천합계': '{:,.0f} 원',
+                        '단가차율(%)': '{:+.1f}%',
+                        '예상절감액': '{:,} 원'
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    processed_df.to_excel(writer, index=False, sheet_name='견적검토결과')
+                
+                st.download_button(
+                    label="📥 검토 완료 결과 엑셀 파일 다운로드",
+                    data=buffer.getvalue(),
+                    file_name=f"BECO_견적검토결과_{uploaded_quote.name}",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                
+        except Exception as e:
+            st.error(f"파일을 읽는 도중 오류가 발생했습니다: {e}")
