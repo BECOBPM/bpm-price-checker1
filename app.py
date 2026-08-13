@@ -52,7 +52,6 @@ st.markdown("""
         margin-bottom: 10px;
     }
     .quote-title { color: #0d47a1; font-weight: 700; font-size: 15px; }
-    .vendor-subtext { font-size: 12px; color: #555555; margin-top: -8px; margin-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -71,38 +70,20 @@ def show_missing_price_dialog():
 
 
 # ----------------------------------------------------
-# 📦 사내 자재 DB 로드 (최저가 업체명 추출 추가)
+# 📦 사내 자재 DB 로드
 # ----------------------------------------------------
 @st.cache_data
 def load_bpm_data():
     df = pd.read_excel('2025년 자재원본.xlsx', sheet_name='Data', header=2)
     df = df[df['입고단가'].notnull() & (df['입고단가'] > 0)]
     
-    # 업체명 관련 컬럼 탐색
-    vendor_col = None
-    for col in ['업체명', '거래처명', '계약상호', '공급업체명', '공급업체', '상호', '업체']:
-        if col in df.columns:
-            vendor_col = col
-            break
-
     def calc_trimmed_stats(g):
         prices = g['입고단가'].dropna().tolist()
         prices.sort()
         n = len(prices)
         if n == 0:
-            return pd.Series({'이력건수': 0, '평균단가': 0, '최소단가': 0, '최대단가': 0, '최저가업체': '', '절사적용': False})
-        
+            return pd.Series({'이력건수': 0, '평균단가': 0, '최소단가': 0, '최대단가': 0, '절사적용': False})
         min_p, max_p = prices[0], prices[-1]
-        
-        # 최저가 납품 업체 추출
-        min_vendor = ""
-        if vendor_col and vendor_col in g.columns:
-            min_rows = g[g['입고단가'] == min_p]
-            if not min_rows.empty:
-                v_val = str(min_rows.iloc[0][vendor_col]).strip()
-                if v_val and v_val.lower() != 'nan':
-                    min_vendor = v_val
-
         if n >= 5:
             avg_p = sum(prices[1:-1]) / len(prices[1:-1])
             is_trimmed = True
@@ -111,12 +92,7 @@ def load_bpm_data():
             is_trimmed = False
             
         return pd.Series({
-            '이력건수': n, 
-            '평균단가': round(avg_p), 
-            '최소단가': min_p, 
-            '최대단가': max_p, 
-            '최저가업체': min_vendor,
-            '절사적용': is_trimmed
+            '이력건수': n, '평균단가': round(avg_p), '최소단가': min_p, '최대단가': max_p, '절사적용': is_trimmed
         })
 
     stats = df.groupby(['자재명', '자재규격'], group_keys=False).apply(calc_trimmed_stats).reset_index()
@@ -125,7 +101,7 @@ def load_bpm_data():
 
 
 # ----------------------------------------------------
-# 📚 폴더 내 물가지 PDF 전체 자동 색인 (카테고리 헤더 인식 기능 강화)
+# 📚 폴더 내 물가지 PDF 전체 자동 색인 (인쇄 페이지 번호 파싱 포함)
 # ----------------------------------------------------
 @st.cache_data
 def load_and_index_reference_pdfs():
@@ -147,7 +123,7 @@ def load_and_index_reference_pdfs():
                     if text:
                         lines = text.split('\n')
                         
-                        # 인쇄 페이지 번호 파싱
+                        # 상단 3줄 내에서 실제 인쇄 페이지 번호(예: 1069) 추출
                         printed_page = f"{page_num}p"
                         for head_line in lines[:3]:
                             page_match = re.search(r'\b([1-9]\d{2,3})\b', head_line)
@@ -155,24 +131,16 @@ def load_and_index_reference_pdfs():
                                 printed_page = f"페이지 {page_match.group(1)}"
                                 break
 
-                        current_header = ""
                         for line in lines:
                             clean_line = line.strip()
                             if clean_line:
+                                # 자간 띄어쓰기 무시용 정규화 텍스트
                                 norm_line = re.sub(r'\s+', '', clean_line).upper()
-                                
-                                # 자재 그룹 헤더 추적 (예: "볼 베 어 링", "게 이 트 밸 브")
-                                ko_chars = re.findall(r'[가-힣]', norm_line)
-                                digits = re.findall(r'\d', norm_line)
-                                if len(ko_chars) >= 2 and len(digits) <= 2:
-                                    current_header = norm_line
-
                                 indexed_data.append({
                                     'file': file_name,
                                     'page_str': printed_page,
                                     'text': clean_line,
-                                    'norm_text': norm_line,
-                                    'header': current_header
+                                    'norm_text': norm_line
                                 })
         except Exception:
             continue
@@ -181,77 +149,75 @@ def load_and_index_reference_pdfs():
 
 
 # ----------------------------------------------------
-# 🔍 정교한 키워드 필터링 검색 (품목명 필수 검증)
+# 🔍 정교한 검색 알고리즘 (띄어쓰기 무시 + 규격/숫자 정밀 매칭)
 # ----------------------------------------------------
 def search_in_indexed_pdfs(target_material, target_spec):
     indexed_lines = load_and_index_reference_pdfs()
     if not indexed_lines:
         return []
 
-    # 한글 품목 키워드 추출 (예: '볼베어링' -> ['볼베어링', '베어링'])
-    ko_raw = re.findall(r'[가-힣]+', target_material)
-    ko_keywords = []
-    for k in ko_raw:
-        k_norm = re.sub(r'\s+', '', k)
-        if len(k_norm) >= 2:
-            ko_keywords.append(k_norm)
-            if '베어링' in k_norm:
-                ko_keywords.append('베어링')
-            if '밸브' in k_norm:
-                ko_keywords.append('밸브')
-    ko_keywords = list(set(ko_keywords))
+    combined_str = f"{target_material} {target_spec}"
+    
+    # 숫자(6000), 영문(ZZ), 한글(볼베어링) 분리
+    num_tokens = re.findall(r'\d+', combined_str)          # 예: ['6000']
+    alpha_tokens = re.findall(r'[a-zA-Z]+', combined_str)  # 예: ['ZZ']
+    ko_tokens = re.findall(r'[가-힣]+', combined_str)      # 예: ['볼베어링']
 
-    # 규격 수치 및 영문 추출
-    spec_numbers = re.findall(r'\d+', target_spec)      # 예: ['6307']
-    spec_letters = re.findall(r'[a-zA-Z]+', target_spec)  # 예: ['ZZ']
-
+    ko_norm_tokens = [re.sub(r'\s+', '', k) for k in ko_tokens]
+    
     candidates = []
     
     for item in indexed_lines:
         norm_line = item['norm_text']
-        header = item['header']
         orig_text = item['text']
         
-        # 1. 필수 조건: 품목 한글 키워드가 본문이나 헤더에 반드시 포함되어야 함 (전기/공통 등 오매칭 방지)
-        if ko_keywords:
-            has_ko_match = any(k in norm_line or k in header for k in ko_keywords)
-            if not has_ko_match:
-                continue
-
-        # 2. 규격 숫자 매칭 (정확한 수치 토큰 일치)
-        score = 10
-        if spec_numbers:
-            matched_num_count = 0
-            for num in spec_numbers:
-                # 숫자 완전 경계 매칭
-                pattern = r'(?<!\d)' + re.escape(num) + r'(?!\d)'
-                if re.search(pattern, norm_line):
-                    matched_num_count += 1
-                    score += 10
-            if matched_num_count == 0:
-                continue  # 규격 숫자가 맞지 않으면 탈락
-
-        # 3. 영문 규격 매칭 (ZZ, DD 등)
-        for a in spec_letters:
-            if a.upper() in norm_line:
-                score += 5
-
-        # 4. 단가 추출
-        numbers = re.findall(r'\b\d{1,3}(?:,\d{3})+\b|\b\d{4,9}\b', orig_text)
-        clean_nums = [int(n.replace(',', '')) for n in numbers if int(n.replace(',', '')) >= 500]
+        score = 0
         
-        if clean_nums:
+        # A. 규격 숫자 일치 여부 (가장 높음: 예 6000)
+        num_matched = False
+        if num_tokens:
+            for num in num_tokens:
+                if len(num) >= 3 and num in norm_line:
+                    score += 5
+                    num_matched = True
+        else:
+            num_matched = True
+            
+        if not num_matched:
+            continue
+            
+        # B. 한글 품명 일치 여부 (띄어쓰기 무시 검색)
+        for k in ko_norm_tokens:
+            if k in norm_line:
+                score += 3
+            elif len(k) >= 3 and k[1:] in norm_line: # '볼베어링' -> '베어링'
+                score += 2
+                    
+        # C. 영문 접미사 일치 여부 (ZZ, DD, OPEN)
+        for a in alpha_tokens:
+            if a.upper() in norm_line:
+                score += 2
+
+        # D. 단가 추출 (500원 이상)
+        numbers = re.findall(r'\b\d{1,3}(?:,\d{3})+\b|\b\d{4,9}\b', orig_text)
+        clean_nums = []
+        for n in numbers:
+            val = int(n.replace(',', ''))
+            if val >= 500:
+                clean_nums.append(val)
+                
+        if clean_nums and score >= 5:
+            # 파일명 정돈 (예: 종합물가정보 2026년 08월호-기계.pdf -> 기계)
             short_fname = item['file'].replace('종합물가정보', '').replace('.pdf', '').strip(' 2026년 08월호-_')
             if not short_fname:
                 short_fname = item['file']
 
-            # ZZ, DD 등 칼럼별 단가 매칭
+            # OPEN, ZZ, DD 순서 대응 가격 선택 (볼베어링 ZZ 특화)
             selected_price = clean_nums[0]
-            upper_spec = target_spec.upper()
-            if 'ZZ' in upper_spec and len(clean_nums) >= 2:
-                selected_price = clean_nums[1]
-            elif 'DD' in upper_spec and len(clean_nums) >= 3:
-                selected_price = clean_nums[2]
+            if 'ZZ' in [a.upper() for a in alpha_tokens] and len(clean_nums) >= 2:
+                selected_price = clean_nums[1] # OPEN, ZZ, DD 중 2번째(ZZ) 가격 선택
+            elif 'DD' in [a.upper() for a in alpha_tokens] and len(clean_nums) >= 3:
+                selected_price = clean_nums[2] # 3번째(DD) 선택
 
             candidates.append({
                 'title': f"📄 [{short_fname} | {item['page_str']}] {orig_text}",
@@ -259,7 +225,7 @@ def search_in_indexed_pdfs(target_material, target_spec):
                 'score': score
             })
 
-    # 적합도 순 정렬
+    # 점수 높은 순 정렬
     candidates.sort(key=lambda x: (x['score'], x['price']), reverse=True)
     
     # 중복 제거
@@ -277,7 +243,7 @@ def search_in_indexed_pdfs(target_material, target_spec):
 try:
     stats_df = load_bpm_data()
 
-    # 상단 헤더
+    # 헤더
     st.markdown("""
     <div class="beco-header">
         <h1>🌿 부산환경공단 (BECO) 자재 단가 검증 시스템</h1>
@@ -312,7 +278,7 @@ try:
         st.markdown('<div class="custom-card">', unsafe_allow_html=True)
         c_search1, c_search2 = st.columns([1.5, 1.5])
         with c_search1:
-            search_kw = st.text_input("🔍 자재명 또는 규격 검색", "", placeholder="예: 게이트밸브, 베어링, 6307").strip()
+            search_kw = st.text_input("🔍 자재명 또는 규격 검색", "", placeholder="예: 게이트밸브, 베어링, 6000zz").strip()
         
         with c_search2:
             if search_kw:
@@ -334,7 +300,6 @@ try:
         bpm_avg = int(target_data['평균단가'])
         bpm_max = int(target_data['최대단가'])
         bpm_min = int(target_data['최소단가'])
-        min_vendor = str(target_data.get('최저가업체', ''))
         is_trimmed = bool(target_data['절사적용'])
 
         st.markdown(f"### 📦 선택 품목: **[{selected_material}]** `({selected_spec})`")
@@ -342,14 +307,7 @@ try:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("사내 구매 이력", f"{bpm_count:,} 건")
         m2.metric("사내 평균 단가" + (" (절사평균)" if is_trimmed else ""), f"{bpm_avg:,.0f} 원")
-        
-        # 과거 최저 단가 + 최저가 납품 업체 소형 표기
         m3.metric("과거 최저 단가", f"{bpm_min:,.0f} 원")
-        if min_vendor:
-            m3.caption(f"🏢 최저가 납품: **{min_vendor}**")
-        else:
-            m3.caption("🏢 최저가 납품: 업체 정보 없음")
-            
         m4.metric("과거 최고 단가", f"{bpm_max:,.0f} 원")
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -362,7 +320,7 @@ try:
         st.markdown("#### 💡 참조 물가지 자동 탐색 및 추천 단가")
         
         if smart_hits:
-            st.success(f"🟢 **총 {len(smart_hits)}건의 정확한 물가지 추천 단가를 찾았습니다.**")
+            st.success(f"🟢 **총 {len(smart_hits)}건의 관련 물가지 추천 단가를 찾았습니다!**")
             hit_options = [f"{item['title']} ➔ [{item['price']:,}원]" for item in smart_hits]
             hit_options.insert(0, "선택 안 함 (직접 입력)")
             
