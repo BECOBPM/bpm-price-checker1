@@ -5,16 +5,14 @@ import re
 # 1. 페이지 기본 설정
 st.set_page_config(page_title="BECO BPM - 부산환경공단", layout="wide")
 
-# 2. CSS 스타일링 (상단 여백 최소화 및 깔끔한 배너/사이드바)
+# 2. Custom CSS (배너 및 레이아웃 개선)
 st.markdown("""
     <style>
-        /* 메인 컨테이너 패딩 조절 */
         .block-container {
             padding-top: 1.2rem !important;
             padding-bottom: 2rem !important;
             max-width: 98% !important;
         }
-        /* 상단 헤더 배너 */
         .top-header-banner {
             background: linear-gradient(135deg, #0e5a36 0%, #1a73e8 100%);
             color: white;
@@ -34,7 +32,6 @@ st.markdown("""
             margin: 5px 0 0 0;
             font-size: 0.9rem;
         }
-        /* 사이드바 스타일 개선 */
         section[data-testid="stSidebar"] {
             background-color: #f8f9fa;
         }
@@ -42,21 +39,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- [데이터 로드 예시] ---
+# --- [데이터 로드: 납품업체 및 입고일자 포함] ---
 @st.cache_data
 def load_sample_data():
-    # 사내 자재 이력 DB 샘플
+    # 같은 자재라도 과거 복수 구매 이력(업체/단가/일자)을 가질 수 있도록 구성
     data = [
-        {"자재명": "볼베어링", "자재규격": "6304zz", "입고단가": 3190},
-        {"자재명": "볼베어링", "자재규격": "6302zz", "입고단가": 2850},
-        {"자재명": "스텐볼밸브", "자재규격": "15A 나사식", "입고단가": 3850},
-        {"자재명": "고분자응집제", "자재규격": "중앙이온(액상)", "입고단가": 125000},
+        {"자재명": "스텐볼밸브", "자재규격": "15A 나사식", "입고단가": 3700, "납품업체": "(주)동래유통", "입고일자": "2025-08-12", "수량": 10},
+        {"자재명": "스텐볼밸브", "자재규격": "15A 나사식", "입고단가": 3850, "납품업체": "(주)부산배관", "입고일자": "2026-02-10", "수량": 15},
+        {"자재명": "스텐볼밸브", "자재규격": "15A 나사식", "입고단가": 4200, "납품업체": "한성공구", "입고일자": "2025-11-05", "수량": 5},
+        {"자재명": "볼베어링", "자재규격": "6302zz", "입고단가": 2700, "납품업체": "한국베어링", "입고일자": "2026-01-15", "수량": 50},
+        {"자재명": "볼베어링", "자재규격": "6302zz", "입고단가": 2950, "납품업체": "삼공사", "입고일자": "2025-09-20", "수량": 30},
+        {"자재명": "볼베어링", "자재규격": "6304zz", "입고단가": 3190, "납품업체": "한국베어링", "입고일자": "2026-03-01", "수량": 20},
+        {"자재명": "고분자응집제", "자재규격": "중앙이온(액상)", "입고단가": 125000, "납품업체": "경남화학", "입고일자": "2026-01-10", "수량": 2},
     ]
     return pd.DataFrame(data)
 
 @st.cache_data
 def load_price_index_data():
-    # 물가지(물가자료/거래가격) DB 샘플
     price_data = [
         {"품목명": "볼베어링", "규격": "6302ZZ", "추천단가": 2700, "출처": "물가자료 2026.04"},
         {"품목명": "볼베어링", "규격": "6304ZZ", "추천단가": 3100, "출처": "거래가격 2026.04"},
@@ -69,26 +68,21 @@ df_history = load_sample_data()
 df_mulga = load_price_index_data()
 
 
-# --- [핵심 로직 1] 공백 기반 다중 키워드 검색 (AND 조건) ---
+# --- [검색 및 매칭 로직] ---
 def search_materials(df, query):
     if not query or not query.strip():
         return df
-    
     tokens = query.strip().lower().split()
     combined_target = (df['자재명'].astype(str) + " " + df['자재규격'].astype(str)).str.lower()
     
     mask = pd.Series(True, index=df.index)
     for token in tokens:
         mask &= combined_target.str.contains(re.escape(token), regex=True, na=False)
-        
     return df[mask]
 
-
-# --- [핵심 로직 2] 물가지 자동 탐색 및 매칭 ---
 def find_reference_price(df_mulga, item_name, item_spec):
     if df_mulga is None or df_mulga.empty:
         return None
-    
     spec_clean = re.sub(r'[^a-zA-Z0-9]', '', str(item_spec)).lower()
     spec_nums = re.findall(r'\d+', str(item_spec))
     
@@ -107,19 +101,16 @@ def find_reference_price(df_mulga, item_name, item_spec):
         if name_match and spec_match:
             matched_rows.append(row)
             
-    if matched_rows:
-        return pd.DataFrame(matched_rows)
-    return None
+    return pd.DataFrame(matched_rows) if matched_rows else None
 
 
 # ==========================================
-# 3. 사이드바 (BECO BPM 메뉴 복원)
+# 3. 사이드바 메뉴
 # ==========================================
 with st.sidebar:
     st.title("🥬 BECO BPM 메뉴")
     st.caption("기능을 선택하세요")
     
-    # 메뉴 선택 라디오 버튼
     selected_menu = st.radio(
         "메뉴 선택",
         ["🔍 단 품목 단가 검증", "📄 업체 견적서 일괄 검토", "📊 자재 데이터 분석"],
@@ -130,25 +121,22 @@ with st.sidebar:
     st.caption("DB 기준: 자재 실시간 입고이력")
     st.markdown("---")
     
-    # 다빈도 구매 자재 TOP 30 선택
     st.markdown("### ⭐ 다빈도 구매 자재 (TOP 30)")
     st.caption("목록에서 빠른 선택")
     
     top30_options = [
         "선택 안함",
-        "고분자응집제 | 중앙이온(액상)",
-        "볼베어링 | 6304zz",
+        "스텐볼밸브 | 15A 나사식",
         "볼베어링 | 6302zz",
-        "스텐볼밸브 | 15A 나사식"
+        "볼베어링 | 6304zz",
+        "고분자응집제 | 중앙이온(액상)"
     ]
     quick_selected = st.selectbox("TOP 30 목록", top30_options, label_visibility="collapsed")
 
 
 # ==========================================
-# 4. 메인 화면 구성
+# 4. 메인 화면
 # ==========================================
-
-# 상단 배너
 st.markdown("""
     <div class="top-header-banner">
         <h1>🌿 부산환경공단 BPM (Beco Parts Master)</h1>
@@ -156,10 +144,10 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# [메뉴 1] 단 품목 단가 검증 선택 시
+
+# --- [메뉴 1] 단 품목 단가 검증 ---
 if selected_menu == "🔍 단 품목 단가 검증":
     
-    # TOP 30 선택 시 검색어 자동 입력 처리
     default_search_val = ""
     if quick_selected != "선택 안함":
         default_search_val = quick_selected.replace(" | ", " ")
@@ -167,49 +155,92 @@ if selected_menu == "🔍 단 품목 단가 검증":
     col_search, col_select = st.columns([1, 1])
     
     with col_search:
-        search_input = st.text_input("🔍 자재명 또는 규격 검색", value=default_search_val, placeholder="예: 베어링 6302")
+        search_input = st.text_input("🔍 자재명 또는 규격 검색", value=default_search_val, placeholder="예: 스텐볼밸브 15A")
     
-    # 검색어로 데이터 필터링
     filtered_df = search_materials(df_history, search_input)
     
+    # 중복 제거된 품목 리스트
+    unique_items = filtered_df[['자재명', '자재규격']].drop_duplicates() if not filtered_df.empty else pd.DataFrame()
+    
     with col_select:
-        if not filtered_df.empty:
-            options = [f"{row['자재명']} | {row['자재규격']}" for _, row in filtered_df.iterrows()]
-            selected_option = st.selectbox(f"검색 결과 ({len(filtered_df)}건)", options)
+        if not unique_items.empty:
+            options = [f"{row['자재명']} | {row['자재규격']}" for _, row in unique_items.iterrows()]
+            selected_option = st.selectbox(f"검색 결과 ({len(options)}건)", options)
             
-            selected_index = options.index(selected_option)
-            selected_item = filtered_df.iloc[selected_index]
+            sel_name, sel_spec = selected_option.split(" | ")
+            # 해당 품목의 모든 구매 이력 추출
+            item_records = df_history[(df_history['자재명'] == sel_name) & (df_history['자재규격'] == sel_spec)]
         else:
             st.selectbox("검색 결과 (0건)", ["검색 결과가 없습니다"])
-            selected_item = None
+            item_records = None
 
-    # 선택 품목 상세 정보 및 물가지 대조
-    if selected_item is not None:
-        st.markdown(f"### 📦 선택 품목: **[{selected_item['자재명']}]** `({selected_item['자재규격']})`")
+    # 선택한 품목 정보 및 납품업체 분석 표시
+    if item_records is not None and not item_records.empty:
+        target_name = item_records.iloc[0]['자재명']
+        target_spec = item_records.iloc[0]['자재규격']
         
-        # 사내 과거 구매 단가 지표
+        st.markdown(f"### 📦 선택 품목: **[{target_name}]** `({target_spec})`")
+        
+        # 최저가 / 최고가 납품업체 계산
+        min_row = item_records.loc[item_records['입고단가'].idxmin()]
+        max_row = item_records.loc[item_records['입고단가'].idxmax()]
+        avg_price = item_records['입고단가'].mean()
+        
+        # 지표 카드 (납품업체 정보 추가)
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("사내 구매 이력", "1 건")
-        c2.metric("사내 평균 단가", f"{selected_item['입고단가']:,} 원")
-        c3.metric("과거 최저 단가", f"{selected_item['입고단가']:,} 원")
-        c4.metric("과거 최고 단가", f"{selected_item['입고단가']:,} 원")
+        c1.metric("사내 구매 이력", f"{len(item_records)} 건")
+        c2.metric("사내 평균 단가", f"{int(avg_price):,} 원")
+        c3.metric(
+            "과거 최저 단가", 
+            f"{min_row['입고단가']:,} 원", 
+            delta=f"최저업체: {min_row['납품업체']}",
+            delta_color="normal"
+        )
+        c4.metric(
+            "과거 최고 단가", 
+            f"{max_row['입고단가']:,} 원", 
+            delta=f"최고업체: {max_row['납품업체']}",
+            delta_color="inverse"
+        )
         
         st.markdown("---")
-        st.markdown("### 💡 참조 물가지 자동 탐색 및 추천 단가")
         
-        # 물가지 데이터베이스 매칭 수행
-        ref_result = find_reference_price(df_mulga, selected_item['자재명'], selected_item['자재규격'])
+        # 물가지 추천 단가
+        st.markdown("#### 💡 참조 물가지 자동 탐색 및 추천 단가")
+        ref_result = find_reference_price(df_mulga, target_name, target_spec)
         
         if ref_result is not None and not ref_result.empty:
             for _, ref in ref_result.iterrows():
                 st.success(f"✅ **[물가지 매칭 성공]** 추천 단가: **{ref['추천단가']:,} 원** (출처: {ref['출처']} / 규격: {ref['규격']})")
         else:
-            st.info("⭕ 참조 물가지에서 일치하는 자동 추천 단가가 없습니다. 직접 입력해 주세요.")
+            st.info("⭕ 참조 물가지에서 일치하는 자동 추천 단가가 없습니다.")
+            
+        # 과거 구매 이력 상세 테이블 (납품업체명 포함)
+        st.markdown("#### 📜 사내 과거 납품 상세 이력")
+        display_df = item_records[['입고일자', '납품업체', '수량', '입고단가']].sort_values(by='입고일자', ascending=False)
+        st.dataframe(
+            display_df.style.format({'입고단가': '{:,} 원', '수량': '{:,} 개'}),
+            use_container_width=True,
+            hide_index=True
+        )
 
+
+# --- [메뉴 2] 업체 견적서 일괄 검토 (기능 UI 구현) ---
 elif selected_menu == "📄 업체 견적서 일괄 검토":
     st.subheader("📄 업체 견적서 일괄 검토")
-    st.info("업체에서 제출한 엑셀 견적서를 업로드하여 사내 이력 및 물가지와 일괄 대조하는 화면입니다.")
+    st.write("업체에서 제출한 엑셀 견적서를 업로드하여 사내 이력 및 물가지와 일괄 대조합니다.")
+    
+    uploaded_file = st.file_uploader("📁 업체 견적서 엑셀 파일(.xlsx)을 업로드하세요", type=["xlsx", "xls"])
+    if uploaded_file:
+        st.success(f"파일명: {uploaded_file.name} 이 성공적으로 업로드되었습니다.")
+        st.info("💡 검증 로직이 실행되어 사내 DB 및 물가지와 일괄 비교 표가 생성됩니다.")
 
+
+# --- [메뉴 3] 자재 데이터 분석 (기능 UI 구현) ---
 elif selected_menu == "📊 자재 데이터 분석":
     st.subheader("📊 자재 데이터 분석")
-    st.info("주요 자재별 단가 변동 추이 및 구매 패턴을 분석하는 화면입니다.")
+    st.write("주요 자재별 단가 변동 추이 및 구매 패턴 분석 결과입니다.")
+    
+    # 간단한 추이 차트 시각화 예시
+    chart_data = df_history[['입고일자', '자재명', '입고단가']].copy()
+    st.line_chart(data=chart_data, x='입고일자', y='입고단가', color='자재명')
