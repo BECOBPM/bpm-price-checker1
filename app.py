@@ -4,9 +4,9 @@ import re
 import os
 import glob
 
-# PAGE CONFIG (최상단 필수)
+# 1. PAGE CONFIG (반드시 최상단)
 st.set_page_config(
-    page_title="BECO BPM (Beco Parts Master) - 자재 단가 검증 시스템", 
+    page_title="BECO BPM - 자재 단가 검증 시스템", 
     layout="wide", 
     page_icon="🌿",
     initial_sidebar_state="expanded"
@@ -57,26 +57,13 @@ st.markdown("""
 
 
 # ----------------------------------------------------
-# 🔔 물가자료 미입력 알림 팝업
-# ----------------------------------------------------
-@st.dialog("⚠️ 물가자료 및 물가정보 검토 알림")
-def show_missing_price_dialog():
-    st.warning("💡 **물가정보 및 물가자료 단가가 입력되지 않았습니다.**")
-    st.write("공인 단가지(물가정보, 물가자료 등)를 검토하셨는지 다시 한번 확인해 주세요.")
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("확인 및 검토 진행", use_container_width=True):
-        st.session_state['dialog_dismissed'] = True
-        st.rerun()
-
-
-# ----------------------------------------------------
-# 📦 사내 자재 DB 로드 (안전성 강화)
+# 📦 사내 자재 DB 로드
 # ----------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_bpm_data():
     excel_path = '2025년 자재원본.xlsx'
     if not os.path.exists(excel_path):
-        return None, f"❌ '{excel_path}' 파일을 찾을 수 없습니다. GitHub 저장소 루트에 업로드되었는지 확인해 주세요."
+        return None, f"❌ '{excel_path}' 파일을 찾을 수 없습니다."
 
     try:
         df = pd.read_excel(excel_path, sheet_name='Data', header=2)
@@ -125,65 +112,20 @@ def load_bpm_data():
         stats['검색용'] = stats['자재명'].astype(str) + " | " + stats['자재규격'].astype(str)
         return stats, None
     except Exception as e:
-        return None, f"❌ 엑셀 데이터 처리 중 오류 발생: {str(e)}"
+        return None, f"❌ 엑셀 데이터 읽기 오류: {str(e)}"
 
 
 # ----------------------------------------------------
-# 📚 참조 물가지 PDF 자동 색인 (메모리 절감 경량화)
+# 📚 참조 물가지 PDF 탐색 (실시간 검색형으로 메모리 최적화)
 # ----------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_and_index_reference_pdfs():
+def search_in_indexed_pdfs(target_material, target_spec):
     if not HAS_PDF:
         return []
         
     pdf_files = glob.glob("종합물가정보*.pdf") + glob.glob("*.pdf")
     pdf_files = [f for f in sorted(list(set(pdf_files))) if '2025년 자재원본' not in f]
     
-    indexed_data = []
-    for f_path in pdf_files[:3]: # 메모리 방지를 위해 최대 3개 PDF만 경량 파싱
-        try:
-            file_name = os.path.basename(f_path)
-            with pdfplumber.open(f_path) as pdf:
-                for page_num, page in enumerate(pdf.pages, 1):
-                    text = page.extract_text()
-                    if text:
-                        lines = text.split('\n')
-                        printed_page = f"{page_num}p"
-                        for head_line in lines[:2]:
-                            page_match = re.search(r'\b([1-9]\d{2,3})\b', head_line)
-                            if page_match:
-                                printed_page = f"페이지 {page_match.group(1)}"
-                                break
-
-                        current_header = ""
-                        for line in lines:
-                            clean_line = line.strip()
-                            if clean_line:
-                                norm_line = re.sub(r'\s+', '', clean_line).upper()
-                                ko_chars = re.findall(r'[가-힣]', norm_line)
-                                digits = re.findall(r'\d', norm_line)
-                                if len(ko_chars) >= 2 and len(digits) <= 2:
-                                    current_header = norm_line
-
-                                indexed_data.append({
-                                    'file': file_name,
-                                    'page_str': printed_page,
-                                    'text': clean_line,
-                                    'norm_text': norm_line,
-                                    'header': current_header
-                                })
-        except Exception:
-            continue
-            
-    return indexed_data
-
-
-# ----------------------------------------------------
-# 🔍 키워드 필터링 검색
-# ----------------------------------------------------
-def search_in_indexed_pdfs(target_material, target_spec):
-    indexed_lines = load_and_index_reference_pdfs()
-    if not indexed_lines:
+    if not pdf_files:
         return []
 
     ko_raw = re.findall(r'[가-힣]+', target_material)
@@ -195,41 +137,60 @@ def search_in_indexed_pdfs(target_material, target_spec):
     spec_letters = re.findall(r'[a-zA-Z]+', target_spec)
 
     candidates = []
-    for item in indexed_lines:
-        norm_line = item['norm_text']
-        header = item['header']
-        orig_text = item['text']
-        
-        # 품목 필수 매칭
-        if ko_keywords and not any(k in norm_line or k in header for k in ko_keywords):
+    
+    # 선택된 품목 검색 시에만 해당 단어 위주로 텍스트 탐색 (메모리 폭주 방지)
+    for f_path in pdf_files:
+        try:
+            file_name = os.path.basename(f_path)
+            with pdfplumber.open(f_path) as pdf:
+                # 속도를 위해 각 PDF당 최대 150페이지까지만 스캔
+                for page_num, page in enumerate(pdf.pages[:150], 1):
+                    text = page.extract_text()
+                    if not text:
+                        continue
+                    
+                    lines = text.split('\n')
+                    printed_page = f"{page_num}p"
+                    
+                    for line in lines:
+                        clean_line = line.strip()
+                        if not clean_line:
+                            continue
+                            
+                        norm_line = re.sub(r'\s+', '', clean_line).upper()
+                        
+                        # 키워드 일치 여부 확인
+                        if ko_keywords and not any(k in norm_line for k in ko_keywords):
+                            continue
+
+                        score = 10
+                        if spec_numbers:
+                            matched_num_count = sum(1 for num in spec_numbers if re.search(r'(?<!\d)' + re.escape(num) + r'(?!\d)', norm_line))
+                            if matched_num_count == 0:
+                                continue
+                            score += matched_num_count * 10
+
+                        for a in spec_letters:
+                            if a.upper() in norm_line:
+                                score += 5
+
+                        numbers = re.findall(r'\b\d{1,3}(?:,\d{3})+\b|\b\d{4,9}\b', clean_line)
+                        clean_nums = [int(n.replace(',', '')) for n in numbers if int(n.replace(',', '')) >= 500]
+                        
+                        if clean_nums:
+                            short_fname = file_name.replace('.pdf', '')
+                            selected_price = clean_nums[0]
+                            if 'ZZ' in target_spec.upper() and len(clean_nums) >= 2:
+                                selected_price = clean_nums[1]
+
+                            candidates.append({
+                                'title': f"📄 [{short_fname} | {printed_page}] {clean_line}",
+                                'price': selected_price,
+                                'score': score
+                            })
+                            if len(candidates) >= 10: break
+        except Exception:
             continue
-
-        # 규격 수치 매칭
-        score = 10
-        if spec_numbers:
-            matched_num_count = sum(1 for num in spec_numbers if re.search(r'(?<!\d)' + re.escape(num) + r'(?!\d)', norm_line))
-            if matched_num_count == 0:
-                continue
-            score += matched_num_count * 10
-
-        for a in spec_letters:
-            if a.upper() in norm_line:
-                score += 5
-
-        numbers = re.findall(r'\b\d{1,3}(?:,\d{3})+\b|\b\d{4,9}\b', orig_text)
-        clean_nums = [int(n.replace(',', '')) for n in numbers if int(n.replace(',', '')) >= 500]
-        
-        if clean_nums:
-            short_fname = item['file'].replace('.pdf', '')
-            selected_price = clean_nums[0]
-            if 'ZZ' in target_spec.upper() and len(clean_nums) >= 2:
-                selected_price = clean_nums[1]
-
-            candidates.append({
-                'title': f"📄 [{short_fname} | {item['page_str']}] {orig_text}",
-                'price': selected_price,
-                'score': score
-            })
 
     candidates.sort(key=lambda x: (x['score'], x['price']), reverse=True)
     
@@ -245,7 +206,7 @@ def search_in_indexed_pdfs(target_material, target_spec):
 
 
 # ----------------------------------------------------
-# 🚀 메인 애플리케이션
+# 🚀 메인 애플리케이션 UI
 # ----------------------------------------------------
 st.markdown("""
 <div class="beco-header">
@@ -254,19 +215,17 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# 자재 DB 데이터 로드
 stats_df, err_msg = load_bpm_data()
 
 if err_msg:
     st.error(err_msg)
-    st.info("💡 **해결 가이드**: GitHub 리포지토리에 `2025년 자재원본.xlsx` 파일이 업로드되어 있는지, `requirements.txt`에 `openpyxl`이 들어있는지 확인해 주세요.")
+    st.info("💡 **조치 필요**: 파일 경로와 requirements.txt 구성을 확인해 주세요.")
 else:
     st.sidebar.markdown("## 🌿 BECO BPM 메뉴")
     page = st.sidebar.radio("기능을 선택하세요", ["🔍 단 품목 단가 검증", "📄 업체 견적서 일괄 검토", "📊 자재 데이터 분석"])
     st.sidebar.caption("DB 기준: 자재 실시간 입고이력")
     st.sidebar.markdown("---")
 
-    # PAGE 1: 단 품목 단가 검증
     if page == "🔍 단 품목 단가 검증":
         st.sidebar.markdown("### ⭐ 다빈도 구매 자재 (TOP 30)")
         top30_df = stats_df.sort_values(by='이력건수', ascending=False).head(30)
@@ -283,7 +242,7 @@ else:
                 if len(search_filtered) > 0:
                     selected_item = st.selectbox(f"검색 결과 ({len(search_filtered)}건)", search_filtered['검색용'].tolist())
                 else:
-                    st.warning("일치하는 자재가 없습니다. TOP 30 항목으로 설정됩니다.")
+                    st.warning("일치하는 자재가 없습니다.")
                     selected_item = selected_from_sidebar
             else:
                 selected_item = selected_from_sidebar
@@ -305,18 +264,17 @@ else:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("사내 구매 이력", f"{bpm_count:,} 건")
         m2.metric("사내 평균 단가" + (" (절사평균)" if is_trimmed else ""), f"{bpm_avg:,.0f} 원")
-        
         m3.metric("과거 최저 단가", f"{bpm_min:,.0f} 원")
         if min_vendor:
             m3.caption(f"🏢 최저가 납품: **{min_vendor}**")
         else:
-            m3.caption("🏢 최저가 납품: 업체 정보 없음")
+            m3.caption("🏢 최저가 납품: 정보 없음")
             
         m4.metric("과거 최고 단가", f"{bpm_max:,.0f} 원")
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # PDF 자동 추천
+        # PDF 탐색 (경량화 로직 적용)
         smart_hits = search_in_indexed_pdfs(selected_material, selected_spec)
         auto_selected_price = 0
 
@@ -324,17 +282,16 @@ else:
         st.markdown("#### 💡 참조 물가지 자동 탐색 및 추천 단가")
         
         if smart_hits:
-            st.success(f"🟢 **총 {len(smart_hits)}건의 정확한 물가지 추천 단가를 찾았습니다.**")
+            st.success(f"🟢 **총 {len(smart_hits)}건의 물가지 추천 단가를 찾았습니다.**")
             hit_options = [f"{item['title']} ➔ [{item['price']:,}원]" for item in smart_hits]
             hit_options.insert(0, "선택 안 함 (직접 입력)")
             
-            selected_hit = st.selectbox("가장 적합한 물가지 항목을 선택하시면 단가에 자동 입력됩니다.", hit_options)
+            selected_hit = st.selectbox("추천 항목을 선택하시면 단가가 자동 설정됩니다.", hit_options)
             if selected_hit != "선택 안 함 (직접 입력)":
                 hit_idx = hit_options.index(selected_hit) - 1
                 auto_selected_price = smart_hits[hit_idx]['price']
-                st.info(f"선택한 추천 단가 **{auto_selected_price:,.0f}원**이 물가정보 단가란에 자동 설정되었습니다.")
         else:
-            st.warning("⚪ **참조 물가지에서 일치하는 추천 단가를 찾지 못했습니다.** (아래에서 직접 입력해 주세요)")
+            st.info("⚪ 참조 물가지에서 일치하는 자동 추천 단가가 없습니다. 직접 입력해 주세요.")
             
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -345,23 +302,21 @@ else:
             st.markdown('<div class="custom-card">', unsafe_allow_html=True)
             st.markdown("#### 💳 비교 단가 입력")
             
-            with st.form(key='price_input_form'):
-                price_info = st.number_input("📑 물가정보 공인 단가 (원)", min_value=0, value=auto_selected_price, step=1000)
-                price_data = st.number_input("📑 물가자료 공인 단가 (원)", min_value=0, value=0, step=1000)
-                
-                st.markdown("""
-                <div class="quote-box">
-                    <div class="quote-title">🟦 구매 / 견적 예정 단가 (검토 대상)</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                price_quote = st.number_input("구매견적가 입력 (원)", min_value=0, value=bpm_avg, step=1000, label_visibility="collapsed")
-                submit_button = st.form_submit_button("🔍 단가 검토 및 팝업 확인 (Enter)", use_container_width=True)
+            price_info = st.number_input("📑 물가정보 공인 단가 (원)", min_value=0, value=auto_selected_price, step=1000)
+            price_data = st.number_input("📑 물가자료 공인 단가 (원)", min_value=0, value=0, step=1000)
+            
+            st.markdown("""
+            <div class="quote-box">
+                <div class="quote-title">🟦 구매 / 견적 예정 단가 (검토 대상)</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            price_quote = st.number_input("구매견적가 입력 (원)", min_value=0, value=bpm_avg, step=1000, label_visibility="collapsed")
+            
+            if price_quote > 0 and price_info == 0 and price_data == 0:
+                st.warning("⚠️ **알림**: 물가정보/물가자료 단가가 입력되지 않았습니다. 공인 단가지 검토 여부를 확인해 주세요.")
 
             st.markdown('</div>', unsafe_allow_html=True)
-
-            if submit_button and price_quote > 0 and price_info == 0 and price_data == 0:
-                show_missing_price_dialog()
 
         with col_result:
             st.markdown('<div class="custom-card">', unsafe_allow_html=True)
