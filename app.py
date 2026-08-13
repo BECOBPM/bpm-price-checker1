@@ -11,9 +11,9 @@ try:
 except ImportError:
     HAS_PDF = False
 
-# PAGE CONFIG (BPM 명칭 적용)
+# PAGE CONFIG
 st.set_page_config(
-    page_title="BECO BPM (Beco Parts Master) - 자재 단가 검증 시스템", 
+    page_title="부산환경공단 자재 단가 검증 시스템", 
     layout="wide", 
     page_icon="🌿",
     initial_sidebar_state="expanded"
@@ -71,7 +71,7 @@ def show_missing_price_dialog():
 
 
 # ----------------------------------------------------
-# 📦 사내 자재 DB 로드 (최저가 업체명 추출)
+# 📦 사내 자재 DB 로드 (최저가 업체명 추출 추가)
 # ----------------------------------------------------
 @st.cache_data
 def load_bpm_data():
@@ -125,7 +125,7 @@ def load_bpm_data():
 
 
 # ----------------------------------------------------
-# 📚 폴더 내 물가지 PDF 전체 자동 색인
+# 📚 폴더 내 물가지 PDF 전체 자동 색인 (카테고리 헤더 인식 기능 강화)
 # ----------------------------------------------------
 @st.cache_data
 def load_and_index_reference_pdfs():
@@ -161,7 +161,7 @@ def load_and_index_reference_pdfs():
                             if clean_line:
                                 norm_line = re.sub(r'\s+', '', clean_line).upper()
                                 
-                                # 자재 그룹 헤더 추적 (예: "볼 베 어 링")
+                                # 자재 그룹 헤더 추적 (예: "볼 베 어 링", "게 이 트 밸 브")
                                 ko_chars = re.findall(r'[가-힣]', norm_line)
                                 digits = re.findall(r'\d', norm_line)
                                 if len(ko_chars) >= 2 and len(digits) <= 2:
@@ -188,6 +188,7 @@ def search_in_indexed_pdfs(target_material, target_spec):
     if not indexed_lines:
         return []
 
+    # 한글 품목 키워드 추출 (예: '볼베어링' -> ['볼베어링', '베어링'])
     ko_raw = re.findall(r'[가-힣]+', target_material)
     ko_keywords = []
     for k in ko_raw:
@@ -200,8 +201,9 @@ def search_in_indexed_pdfs(target_material, target_spec):
                 ko_keywords.append('밸브')
     ko_keywords = list(set(ko_keywords))
 
-    spec_numbers = re.findall(r'\d+', target_spec)
-    spec_letters = re.findall(r'[a-zA-Z]+', target_spec)
+    # 규격 수치 및 영문 추출
+    spec_numbers = re.findall(r'\d+', target_spec)      # 예: ['6307']
+    spec_letters = re.findall(r'[a-zA-Z]+', target_spec)  # 예: ['ZZ']
 
     candidates = []
     
@@ -210,25 +212,26 @@ def search_in_indexed_pdfs(target_material, target_spec):
         header = item['header']
         orig_text = item['text']
         
-        # 1. 품목 한글 키워드가 본문/헤더에 존재해야 함
+        # 1. 필수 조건: 품목 한글 키워드가 본문이나 헤더에 반드시 포함되어야 함 (전기/공통 등 오매칭 방지)
         if ko_keywords:
             has_ko_match = any(k in norm_line or k in header for k in ko_keywords)
             if not has_ko_match:
                 continue
 
-        # 2. 규격 숫자 매칭
+        # 2. 규격 숫자 매칭 (정확한 수치 토큰 일치)
         score = 10
         if spec_numbers:
             matched_num_count = 0
             for num in spec_numbers:
+                # 숫자 완전 경계 매칭
                 pattern = r'(?<!\d)' + re.escape(num) + r'(?!\d)'
                 if re.search(pattern, norm_line):
                     matched_num_count += 1
                     score += 10
             if matched_num_count == 0:
-                continue
+                continue  # 규격 숫자가 맞지 않으면 탈락
 
-        # 3. 영문 규격 매칭
+        # 3. 영문 규격 매칭 (ZZ, DD 등)
         for a in spec_letters:
             if a.upper() in norm_line:
                 score += 5
@@ -242,6 +245,7 @@ def search_in_indexed_pdfs(target_material, target_spec):
             if not short_fname:
                 short_fname = item['file']
 
+            # ZZ, DD 등 칼럼별 단가 매칭
             selected_price = clean_nums[0]
             upper_spec = target_spec.upper()
             if 'ZZ' in upper_spec and len(clean_nums) >= 2:
@@ -255,8 +259,10 @@ def search_in_indexed_pdfs(target_material, target_spec):
                 'score': score
             })
 
+    # 적합도 순 정렬
     candidates.sort(key=lambda x: (x['score'], x['price']), reverse=True)
     
+    # 중복 제거
     seen = set()
     unique_candidates = []
     for c in candidates:
@@ -271,16 +277,16 @@ def search_in_indexed_pdfs(target_material, target_spec):
 try:
     stats_df = load_bpm_data()
 
-    # 상단 헤더 (BPM 명칭 반영)
+    # 상단 헤더
     st.markdown("""
     <div class="beco-header">
-        <h1>🌿 부산환경공단 BPM (Beco Parts Master)</h1>
+        <h1>🌿 부산환경공단 (BECO) 자재 단가 검증 시스템</h1>
         <p>자재 수불 이력 기반 공정·투명 계약지원 시스템 | 기술개발 및 단가심사 자동화</p>
     </div>
     """, unsafe_allow_html=True)
 
-    # 사이드바 (BECO BPM 반영)
-    st.sidebar.markdown("## 🌿 BECO BPM 메뉴")
+    # 사이드바
+    st.sidebar.markdown("## 🌿 BECO 메뉴")
     page = st.sidebar.radio("기능을 선택하세요", ["🔍 단 품목 단가 검증", "📄 업체 견적서 일괄 검토", "📊 자재 데이터 분석"])
     st.sidebar.caption("DB 기준: 자재 실시간 입고이력")
     st.sidebar.markdown("---")
@@ -348,7 +354,7 @@ try:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 로컬 PDF 참조 단가 탐색
+        # 🔍 로컬 PDF 내 유사 항목 자동 탐색 및 명확한 추천 상태 표시
         smart_hits = search_in_indexed_pdfs(selected_material, selected_spec)
         auto_selected_price = 0
 
