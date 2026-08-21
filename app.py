@@ -60,14 +60,15 @@ def load_bpm_master_data():
     df = pd.read_excel(file_path, sheet_name='Data', header=2)
     df = df[df['입고단가'].notnull() & (df['입고단가'] > 0)]
     
-    # 분야(기계/전기/환경) 자동 분류 컬럼 생성
+    # 분야(기계/전기/약품) 자동 분류 컬럼 생성
     def classify_category(row):
         name = str(row['자재명'])
         code = str(row['자재코드'])
+        chem_keywords = ['약품', '응집제', '차염', '소다', '폴리', '황산', '가성', '소화', '소석회', '활성탄', 'PAC', '고분자', '염소', '철']
         if '전기' in name or code.startswith('02'):
             return '전기'
-        elif '환경' in name or '약품' in name or '응집제' in name or code.startswith('03'):
-            return '환경'
+        elif any(k in name for k in chem_keywords) or code.startswith('03'):
+            return '약품'
         else:
             return '기계'
 
@@ -142,7 +143,7 @@ try:
     st.sidebar.markdown("---")
     st.sidebar.success(f"사내 마스터 DB 연동 완료 ({len(stats_df):,}개 품목)")
 
-    # 상단 배너 (BPM 타이틀 적용)
+    # 상단 배너
     st.markdown("""
     <div class="beco-header">
         <h1>🌿 부산환경공단 BPM (Beco Parts Master)</h1>
@@ -164,7 +165,7 @@ try:
             st.markdown('<div class="custom-card">', unsafe_allow_html=True)
             c1, c2 = st.columns([1.5, 1.5])
             with c1:
-                search_kw = st.text_input("🔍 자재명 또는 규격 검색", "", placeholder="예: 파이프, 엘보, 볼베어링, 밸브").strip()
+                search_kw = st.text_input("🔍 자재명 또는 규격 검색", "", placeholder="예: 파이프, 응집제, 가성소다, 볼베어링").strip()
             with c2:
                 if search_kw:
                     filtered = stats_df[stats_df['검색용'].str.contains(search_kw, case=False, na=False)]
@@ -223,13 +224,13 @@ try:
                 st.markdown('</div>', unsafe_allow_html=True)
 
     # ====================================================
-    # 🌟 2. 분야별 다빈도 자재 (기계/전기/환경 TOP 30)
+    # 🌟 2. 분야별 다빈도 자재 (기계/전기/약품 TOP 30)
     # ====================================================
     elif page == "📈 분야별 다빈도 자재 (TOP 30)":
-        st.subheader("📈 분야별 최다 구매 자재 순위 (기계 / 전기 / 환경 TOP 30)")
-        st.write("사내 입고 이력을 바탕으로 각 분야별 가장 빈번하게 수급되는 핵심 자재를 집계합니다.")
+        st.subheader("📈 분야별 최다 구매 자재 순위 (기계 / 전기 / 약품 TOP 30)")
+        st.write("사내 입고 이력을 바탕으로 각 분야별(기계, 전기, 약품) 가장 빈번하게 수급되는 핵심 자재를 집계합니다.")
         
-        tab_mech, tab_elec, tab_env = st.tabs(["⚙️ 기계 분야", "⚡ 전기 분야", "🌿 환경 분야"])
+        tab_mech, tab_elec, tab_chem = st.tabs(["⚙️ 기계 분야", "⚡ 전기 분야", "🧪 약품 분야"])
         
         def show_top30_table(category_name):
             sub_df = stats_df[stats_df['대표분류'] == category_name].sort_values(by='이력건수', ascending=False).head(30).copy()
@@ -249,8 +250,8 @@ try:
             show_top30_table('기계')
         with tab_elec:
             show_top30_table('전기')
-        with tab_env:
-            show_top30_table('환경')
+        with tab_chem:
+            show_top30_table('약품')
 
     # ====================================================
     # 🌟 3. 단가계약 가능 품목 리스트
@@ -284,10 +285,10 @@ try:
         st.write("업체가 제출한 견적서 엑셀을 업로드하면, 사내 마스터 DB(8,418건)와 즉시 교차 대조하여 적정성을 판정하고 예상 예산 절감액을 산출합니다.")
         
         sample_template = pd.DataFrame({
-            "품목명": ["스텐 배관 파이프", "볼베어링"],
-            "규격": ["STS304 50A", "6302ZZ"],
-            "수량": [10, 50],
-            "견적단가": [125000, 2800]
+            "품목명": ["스텐 배관 파이프", "고분자응집제"],
+            "규격": ["STS304 50A", "중앙이온(액상)"],
+            "수량": [10, 100],
+            "견적단가": [125000, 128000]
         })
         buffer_tpl = io.BytesIO()
         with pd.ExcelWriter(buffer_tpl, engine='openpyxl') as writer:
@@ -384,14 +385,45 @@ try:
                 st.error(f"견적서 처리 중 오류 발생: {e}")
 
     # ====================================================
-    # 🌟 5. 사내 자재 현황 분석
+    # 🌟 5. 사내 자재 현황 분석 (사업소별 구매 빈도 포함)
     # ====================================================
     else:
         st.subheader("📊 사내 자재 수불 이력 종합 분석")
+        
         c1, c2, c3 = st.columns(3)
         c1.metric("총 입고 이력 건수", f"{len(raw_history_df):,} 건")
         c2.metric("등록된 고유 자재 품목", f"{len(stats_df):,} 개")
-        c3.metric("총 입고 금액", f"{raw_history_df['입고금액'].sum():,.0f} 원" if '입고금액' in raw_history_df.columns else "계산 중")
+        c3.metric("총 입고 금액", f"{raw_history_df['입고금액'].sum():,.0f} 원" if '입고금액' in raw_history_df.columns else "정보 없음")
+        
+        st.markdown("---")
+        
+        if not raw_history_df.empty and '사업장' in raw_history_df.columns:
+            st.markdown("#### 🏢 사업소별 자재 수급 현황 (구매 빈도 및 금액)")
+            
+            biz_grouped = raw_history_df.groupby('사업장').agg(
+                입고건수=('입고단가', 'count'),
+                총구매금액=('입고금액', 'sum') if '입고금액' in raw_history_df.columns else ('입고단가', 'sum')
+            ).reset_index().sort_values(by='입고건수', ascending=False)
+            
+            col_chart, col_table = st.columns([1.2, 1])
+            
+            with col_chart:
+                st.markdown("##### 📊 사업소별 구매 빈도 (입고 건수 순)")
+                chart_data = biz_grouped.set_index('사업장')[['입고건수']]
+                st.bar_chart(chart_data)
+                
+            with col_table:
+                st.markdown("##### 📋 사업소별 상세 집계표")
+                st.dataframe(
+                    biz_grouped.style.format({
+                        '입고건수': '{:,} 건',
+                        '총구매금액': '{:,.0f} 원'
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
+        else:
+            st.warning("원본 데이터에 '사업장' 정보가 존재하지 않습니다.")
 
 except Exception as e:
     st.error(f"시스템 초기화 중 오류 발생: {e}")
