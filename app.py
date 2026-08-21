@@ -49,7 +49,7 @@ st.markdown("""
 
 
 # ----------------------------------------------------
-# 📦 1순위: 사내 자재 입고 원본 DB 로드 (2025년 자재원본.xlsx)
+# 📦 1순위: 사내 자재 입고 원본 DB 로드 (분류 없이 통계 산출)
 # ----------------------------------------------------
 @st.cache_data
 def load_bpm_master_data():
@@ -60,26 +60,12 @@ def load_bpm_master_data():
     df = pd.read_excel(file_path, sheet_name='Data', header=2)
     df = df[df['입고단가'].notnull() & (df['입고단가'] > 0)]
     
-    # 분야(기계/전기/약품) 자동 분류 컬럼 생성
-    def classify_category(row):
-        name = str(row['자재명'])
-        code = str(row['자재코드'])
-        chem_keywords = ['약품', '응집제', '차염', '소다', '폴리', '황산', '가성', '소화', '소석회', '활성탄', 'PAC', '고분자', '염소', '철']
-        if '전기' in name or code.startswith('02'):
-            return '전기'
-        elif any(k in name for k in chem_keywords) or code.startswith('03'):
-            return '약품'
-        else:
-            return '기계'
-
-    df['분류'] = df.apply(classify_category, axis=1)
-    
     def calc_trimmed_stats(g):
         prices = g['입고단가'].dropna().tolist()
         prices.sort()
         n = len(prices)
         if n == 0:
-            return pd.Series({'이력건수': 0, '평균단가': 0, '최소단가': 0, '최대단가': 0, '대표분류': '기계'})
+            return pd.Series({'이력건수': 0, '평균단가': 0, '최소단가': 0, '최대단가': 0})
         min_p, max_p = prices[0], prices[-1]
         
         if n >= 5:
@@ -87,9 +73,8 @@ def load_bpm_master_data():
         else:
             avg_p = sum(prices) / n
             
-        cat = g['분류'].iloc[0]
         return pd.Series({
-            '이력건수': n, '평균단가': round(avg_p), '최소단가': min_p, '최대단가': max_p, '대표분류': cat
+            '이력건수': n, '평균단가': round(avg_p), '최소단가': min_p, '최대단가': max_p
         })
 
     stats = df.groupby(['자재명', '자재규격'], group_keys=False).apply(calc_trimmed_stats).reset_index()
@@ -97,35 +82,8 @@ def load_bpm_master_data():
     return stats, df
 
 
-# ----------------------------------------------------
-# 📚 2순위: 물가지 백그라운드 자동 로드 (엑셀 및 PDF 통합)
-# ----------------------------------------------------
-@st.cache_data
-def load_price_index_db():
-    mulga_dict = {}
-    excel_files = glob.glob("종합물가정보*.xlsx") + glob.glob("*.xlsx")
-    for f in excel_files:
-        if '2025년 자재원본' in f:
-            continue
-        try:
-            xls = pd.ExcelFile(f)
-            for sheet in xls.sheet_names:
-                df_s = pd.read_excel(xls, sheet_name=sheet)
-                for _, row in df_s.iterrows():
-                    row_str = " ".join([str(val) for val in row.values if pd.notna(val)])
-                    nums = re.findall(r'\b\d{1,3}(?:,\d{3})+\b|\b\d{4,9}\b', row_str)
-                    if nums:
-                        price_val = int(nums[-1].replace(',', ''))
-                        if price_val >= 500:
-                            mulga_dict[row_str[:50]] = price_val
-        except Exception:
-            continue
-    return mulga_dict
-
-
 try:
     stats_df, raw_history_df = load_bpm_master_data()
-    mulga_database = load_price_index_db()
 
     # 사이드바 메뉴
     st.sidebar.markdown("## 🌿 BECO BPM 메뉴")
@@ -133,7 +91,7 @@ try:
         "기능을 선택하세요", 
         [
             "🔍 단 품목 단가 검증", 
-            "📈 분야별 다빈도 자재 (TOP 30)", 
+            "📈 다빈도 자재 (TOP 30)", 
             "📋 단가계약 가능 품목 리스트", 
             "📄 업체 견적서 일괄 심사",
             "📊 사내 자재 현황 분석"
@@ -165,7 +123,7 @@ try:
             st.markdown('<div class="custom-card">', unsafe_allow_html=True)
             c1, c2 = st.columns([1.5, 1.5])
             with c1:
-                search_kw = st.text_input("🔍 자재명 또는 규격 검색", "", placeholder="예: 파이프, 응집제, 가성소다, 볼베어링").strip()
+                search_kw = st.text_input("🔍 자재명 또는 규격 검색", "", placeholder="예: 파이프, 엘보, 볼베어링, 밸브").strip()
             with c2:
                 if search_kw:
                     filtered = stats_df[stats_df['검색용'].str.contains(search_kw, case=False, na=False)]
@@ -177,9 +135,9 @@ try:
 
             target = stats_df[stats_df['검색용'] == selected_item].iloc[0]
             mat_name, mat_spec = target['자재명'], target['자재규격']
-            cnt, avg_p, min_p, max_p, cat = int(target['이력건수']), int(target['평균단가']), int(target['최소단가']), int(target['최대단가']), target['대표분류']
+            cnt, avg_p, min_p, max_p = int(target['이력건수']), int(target['평균단가']), int(target['최소단가']), int(target['최대단가'])
 
-            st.markdown(f"### 📦 선택 품목: **[{mat_name}]** `({mat_spec})` — <span style='color:#1e88e5; font-size:18px;'>[{cat} 분야]</span>", unsafe_allow_html=True)
+            st.markdown(f"### 📦 선택 품목: **[{mat_name}]** `({mat_spec})`")
             
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("사내 구매 이력", f"{cnt:,} 건")
@@ -224,34 +182,25 @@ try:
                 st.markdown('</div>', unsafe_allow_html=True)
 
     # ====================================================
-    # 🌟 2. 분야별 다빈도 자재 (기계/전기/약품 TOP 30)
+    # 🌟 2. 다빈도 자재 TOP 30 (전체 통합)
     # ====================================================
-    elif page == "📈 분야별 다빈도 자재 (TOP 30)":
-        st.subheader("📈 분야별 최다 구매 자재 순위 (기계 / 전기 / 약품 TOP 30)")
-        st.write("사내 입고 이력을 바탕으로 각 분야별(기계, 전기, 약품) 가장 빈번하게 수급되는 핵심 자재를 집계합니다.")
+    elif page == "📈 다빈도 자재 (TOP 30)":
+        st.subheader("📈 전체 최다 구매 자재 순위 (TOP 30)")
+        st.write("사내 입고 이력을 바탕으로 가장 빈번하게 수급되는 핵심 자재 TOP 30을 집계합니다.")
         
-        tab_mech, tab_elec, tab_chem = st.tabs(["⚙️ 기계 분야", "⚡ 전기 분야", "🧪 약품 분야"])
+        top30_df = stats_df.sort_values(by='이력건수', ascending=False).head(30).copy()
+        top30_df.insert(0, '순위', range(1, len(top30_df) + 1))
         
-        def show_top30_table(category_name):
-            sub_df = stats_df[stats_df['대표분류'] == category_name].sort_values(by='이력건수', ascending=False).head(30).copy()
-            sub_df.insert(0, '순위', range(1, len(sub_df) + 1))
-            st.dataframe(
-                sub_df[['순위', '자재명', '자재규격', '이력건수', '평균단가', '최소단가', '최대단가']].style.format({
-                    '이력건수': '{:,} 건',
-                    '평균단가': '{:,.0f} 원',
-                    '최소단가': '{:,.0f} 원',
-                    '최대단가': '{:,.0f} 원'
-                }),
-                use_container_width=True,
-                hide_index=True
-            )
-
-        with tab_mech:
-            show_top30_table('기계')
-        with tab_elec:
-            show_top30_table('전기')
-        with tab_chem:
-            show_top30_table('약품')
+        st.dataframe(
+            top30_df[['순위', '자재명', '자재규격', '이력건수', '평균단가', '최소단가', '최대단가']].style.format({
+                '이력건수': '{:,} 건',
+                '평균단가': '{:,.0f} 원',
+                '최소단가': '{:,.0f} 원',
+                '최대단가': '{:,.0f} 원'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
 
     # ====================================================
     # 🌟 3. 단가계약 가능 품목 리스트
@@ -267,7 +216,7 @@ try:
         st.markdown("---")
         
         st.dataframe(
-            contract_targets[['NO', '대표분류', '자재명', '자재규격', '이력건수', '평균단가', '최소단가', '최대단가']].style.format({
+            contract_targets[['NO', '자재명', '자재규격', '이력건수', '평균단가', '최소단가', '최대단가']].style.format({
                 '이력건수': '{:,} 회',
                 '평균단가': '{:,.0f} 원',
                 '최소단가': '{:,.0f} 원',
@@ -285,10 +234,10 @@ try:
         st.write("업체가 제출한 견적서 엑셀을 업로드하면, 사내 마스터 DB(8,418건)와 즉시 교차 대조하여 적정성을 판정하고 예상 예산 절감액을 산출합니다.")
         
         sample_template = pd.DataFrame({
-            "품목명": ["스텐 배관 파이프", "고분자응집제"],
-            "규격": ["STS304 50A", "중앙이온(액상)"],
-            "수량": [10, 100],
-            "견적단가": [125000, 128000]
+            "품목명": ["강관", "볼베어링"],
+            "규격": ["20A", "6302zz"],
+            "수량": [10, 50],
+            "견적단가": [17000, 2800]
         })
         buffer_tpl = io.BytesIO()
         with pd.ExcelWriter(buffer_tpl, engine='openpyxl') as writer:
